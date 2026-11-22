@@ -15,7 +15,7 @@ If the locked runtime is unavailable, escalate to the user — never substitute.
 
 - Review at the **delivery aspect ratio**, not the source frames: the product must stay recognisable after crop, grade, transitions and compression (`skills/creative/commercial-product-video.md` §6 rubric — identity and literal-operation failures are blocking).
 - The end card's product name and CTA are legible at delivery size and on screen long enough to read. Run the 25 % scale check in `edit-director.md` → "End card copy" on the last frame of the render.
-- The packshot shows no seam or colour step where a cropped photo meets its extended background, and no product part is cut off. If either appears, fix the frame and render again; do not just note it in `final_review`.
+- The packshot is a straight crop of a real photo with no product part cut off by the frame edge. If a part is cut, fix the frame and render again; do not just note it in `final_review`.
 - Grade must not shift the product colour away from the reference photos.
 
 Produce `render_report` and `final_review`.

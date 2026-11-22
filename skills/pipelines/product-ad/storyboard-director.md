@@ -6,7 +6,9 @@ One reviewable keyframe per scene (plus an end frame for `first_last_frame` shot
 
 ## Clean the references first
 
-Models copy whatever is in the reference — including a generator watermark (e.g. the Gemini ✦ sparkle in a corner), stamps or UI overlays. If a product photo carries one, make a cleaned copy in `inputs/clean/` and pass that as `identity_references`. Paint the mark out from the neighbouring background with Pillow: mask the bright mark pixels, interpolate each row from the unmasked pixels, then a light blur. Do not crop away product parts. Look at the cleaned crop before using it. Never alter the product itself.
+Models copy whatever is in the reference — including a generator watermark (e.g. the Gemini ✦ sparkle in a corner), stamps or UI overlays. If a product photo carries one, **crop it away** instead of painting it out: cut off the strip at the right and/or bottom edge that holds the mark, save the result to `inputs/clean/<name>.png`, and pass that as `identity_references`. Open the cropped corner at 100 % to confirm the mark is gone. Never alter the product itself; if the crop would cut a product view, accept losing that view.
+
+Generated frames can still copy a mark into the same corner. Ask for plain background in the outer ~10 % on the right and bottom (add it to `notes`), then crop exactly 10 % off the right and 10 % off the bottom of every generated frame. Cropping both sides by the same fraction keeps the aspect ratio. Record the crop in the frame's `notes`.
 
 ## Generate
 
@@ -26,22 +28,18 @@ storyboard_frames(
 
 ## Packshot frame (`packshot_still`)
 
-The packshot is held on screen for seconds at full delivery size, so it must be the sharpest frame in the ad. Build it from a real product photo; use a generated frame only when no usable photo exists.
+The packshot is held on screen for seconds at full delivery size, so it must be the sharpest frame in the ad. Make it a **straight crop of a real product photo** at the delivery aspect. Do not composite: no pasting a cut-out onto a filled canvas, no extended background, no feathered masks. Those produce seams and cut-off edges.
 
-1. **Source.** Use a real photo at native resolution. A generated frame below the delivery height (e.g. muse returns ~500 px wide) is never a packshot: upscaling it 2× or more makes it soft. If the only photo is a composite, crop one product from it.
-2. **Crop.** Keep the whole product with a margin of about 10 % of its size on every side: all parts (both knobs, the stand/handle, the cable if it explains a feature) stay inside the crop. Do not cut through the product or its shadow. Exclude other products, devices and accessories from the composite.
-3. **Canvas without seams.** Never paste a hard-edged crop onto a flat colour fill: the step at the crop edge shows as a line across the frame. Instead:
-   - fill the canvas with the photo's own background: stretch or mirror the crop's edge strips outward, blur them heavily (radius ≥ 5 % of the canvas width), or use a gradient sampled from the crop's border pixels;
-   - feather the crop into that fill with a soft mask (≥ 60 px at 1080p, or ~6 % of the crop width), so there is no hard edge;
-   - match brightness and colour across the join.
-4. **Layout.** Use the delivery aspect and size. The product fills about 45–60 % of the frame height and sits on one third. Keep the other side empty and calm for the product name and CTA, inside a 5 % title-safe margin. Upscale the crop by at most 1.5×; if the crop needs more, use a smaller product scale.
-5. **Record.** Write the result to `assets/storyboard/<scene>_start.png` with `source: provided`. In `notes`, say which part of which photo was used and how the canvas was extended.
+1. **Source.** Use a real photo at native resolution (the cleaned copy when the original has a watermark). A generated frame below the delivery height (e.g. muse returns ~500 px wide) is never a packshot.
+2. **Window.** Choose one rectangle at the exact delivery aspect (16:9, 9:16, 1:1) around one product. Choose it so that:
+   - the whole product is inside, with its base or shadow and all its parts (knobs, stand or handle, cable if it explains a feature); no edge of the window cuts through the product;
+   - the product fills about 45–70 % of the window height;
+   - one side of the window is the calmest area of the photo. The copy goes there.
+   Other objects from a composite may sit at the window's edges. The copy panel or a soft vignette can cover them; never paint them out.
+3. **Scale.** Resize the window to the delivery size with a single resize, upscaling at most 1.5×. If the window is smaller than 1/1.5 of the delivery size, choose a larger window with a smaller product share.
+4. **Record.** Save to `assets/storyboard/<scene>_start.png` with `source: provided`. In `notes`, give the photo, the window box `(x0, y0, x1, y1)` and the upscale factor. Measure the product box on the output with code and give its height as a % of the frame.
 
-Check it at 100 % zoom before presenting:
-- no visible vertical or horizontal edge, and no colour step;
-- no product part cut off;
-- the edges of the product are sharp, not upscaled mush;
-- the copy area holds no detail that would fight the text.
+Before presenting, check at 100 %: no product part cut by the frame edge, no upscale blur, and a copy side with no detail that would fight the text.
 
 ## Review before presenting
 
