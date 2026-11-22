@@ -298,7 +298,7 @@ button { font: inherit; }
 .ds-sb-body .top span { font-family: var(--ds-mono); font-size: 12px; color: var(--ds-muted); }
 .ds-sb-body .desc { font-size: 13px; line-height: 1.45; color: var(--ds-text-2); }
 .ds-sb-body .method { align-self: flex-start; font-size: 11px; padding: 2px 8px; border-radius: 999px; background: var(--ds-chip); color: var(--ds-text-2); }
-.ds-sb-body .acts { display: flex; justify-content: flex-end; gap: 2px; margin: 0 -8px -4px 0; }
+.ds-sb-body .acts { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 2px; margin: 0 -8px -4px 0; white-space: nowrap; }
 .ds-sb-body .acts button { min-height: 32px; padding: 0 8px; border: 0; background: transparent; color: var(--ds-blue-2); font: inherit; font-size: 12px; cursor: pointer; }
 
 /* media tab */

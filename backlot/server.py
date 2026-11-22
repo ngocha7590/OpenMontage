@@ -251,7 +251,7 @@ def create_app() -> FastAPI:
     # ---- Thumbnails (downscaled, cached on disk) ------------------------
 
     @app.get("/thumb/{project_id}/{file_path:path}")
-    async def thumb(project_id: str, file_path: str, w: int = 640) -> FileResponse:
+    async def thumb(project_id: str, file_path: str, w: int = 640, t: Optional[float] = None) -> FileResponse:
         project_dir = _safe_project_dir(project_id)
         target = (project_dir / file_path).resolve()
         try:
@@ -261,7 +261,10 @@ def create_app() -> FastAPI:
         if not target.is_file():
             raise HTTPException(status_code=404, detail="media not found")
         width = min(THUMB_WIDTHS, key=lambda x: abs(x - w))
-        cached = await asyncio.to_thread(_thumbnail_for, target, width)
+        # ``t`` (seconds) picks the video frame — scene cards use a frame from
+        # the final render when a scene has no asset of its own.
+        at = None if t is None or not (t == t) else max(0.0, min(float(t), 36000.0))
+        cached = await asyncio.to_thread(_thumbnail_for, target, width, at)
         if cached is None:
             # Never fall back to raw video bytes for an <img> consumer (F-03);
             # non-thumbable images are safe to serve as-is.
@@ -335,8 +338,11 @@ def _sse(payload: dict) -> str:
     return f"data: {json.dumps(payload)}\n\n"
 
 
-def _thumbnail_for(source: Path, width: int) -> Optional[Path]:
-    """Downscale an image (or extract a video poster frame) to a cached JPEG."""
+def _thumbnail_for(source: Path, width: int, at: Optional[float] = None) -> Optional[Path]:
+    """Downscale an image (or extract a video frame) to a cached JPEG.
+
+    Video frames come from ``at`` seconds (default 1.5 s — the poster).
+    """
     suffix = source.suffix.lower()
     is_image = suffix in {".png", ".jpg", ".jpeg", ".webp", ".gif"}
     is_video = suffix in {".mp4", ".webm", ".mov"}
@@ -346,7 +352,7 @@ def _thumbnail_for(source: Path, width: int) -> Optional[Path]:
         import hashlib
         stat = source.stat()
         key = hashlib.sha1(
-            f"{source}|{stat.st_mtime_ns}|{stat.st_size}|{width}".encode()
+            f"{source}|{stat.st_mtime_ns}|{stat.st_size}|{width}|{'' if at is None else round(at, 2)}".encode()
         ).hexdigest()[:20]
         cached = THUMB_CACHE_DIR / f"{key}.jpg"
         if cached.is_file():
@@ -359,7 +365,7 @@ def _thumbnail_for(source: Path, width: int) -> Optional[Path]:
         if is_video:
             import subprocess
             result = subprocess.run(
-                ["ffmpeg", "-y", "-loglevel", "error", "-ss", "1.5",
+                ["ffmpeg", "-y", "-loglevel", "error", "-ss", "1.5" if at is None else f"{at:.2f}",
                  "-i", str(source), "-frames:v", "1",
                  "-vf", f"scale={width}:-2", str(tmp)],
                 capture_output=True, timeout=30,

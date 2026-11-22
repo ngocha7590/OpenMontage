@@ -254,3 +254,32 @@ class TestFindingsFixes:
         fake_video.write_bytes(b"\x00" * 4096)
         res = client.get("/thumb/vid/renders/final.mp4")
         assert res.status_code == 404  # never the raw video bytes (F-03)
+
+    def test_thumb_video_frame_at_time(self, client, projects_root, monkeypatch):
+        """``?t=`` picks the video frame (scene cards cut from the final render)."""
+        import subprocess as sp
+
+        from backlot import server as server_mod
+
+        p = _make_project(projects_root, "vidt")
+        video = p / "renders" / "final.mp4"
+        video.parent.mkdir(parents=True, exist_ok=True)
+        video.write_bytes(b"\x00" * 4096)
+        monkeypatch.setattr(server_mod, "THUMB_CACHE_DIR", projects_root / ".thumbs")
+        calls = []
+
+        def fake_run(argv, **kw):
+            calls.append(argv)
+            Path(argv[-1]).write_bytes(b"\xff\xd8\xff\xd9")
+            return sp.CompletedProcess(argv, 0, b"", b"")
+
+        monkeypatch.setattr(sp, "run", fake_run)
+        a = client.get("/thumb/vidt/renders/final.mp4?w=640&t=12.5")
+        b = client.get("/thumb/vidt/renders/final.mp4?w=640&t=3")
+        c = client.get("/thumb/vidt/renders/final.mp4?w=640")
+        assert a.status_code == b.status_code == c.status_code == 200
+        assert a.headers["content-type"] == "image/jpeg"
+        seeks = [argv[argv.index("-ss") + 1] for argv in calls]
+        assert seeks == ["12.50", "3.00", "1.5"]  # distinct cache entries per t
+        client.get("/thumb/vidt/renders/final.mp4?w=640&t=-5")
+        assert calls[-1][calls[-1].index("-ss") + 1] == "0.00"  # clamped

@@ -805,9 +805,41 @@ function sceneThumb(s, card) {
     return el("div", { class: "thumb" }, img, v.snapshot ? el("span", { class: "badge" }, "snapshot") : null);
   }
   if (v && !v.exists) return el("div", { class: "thumb missing" }, "Có trong manifest, thiếu file");
+  // No per-scene asset (e.g. rigged character scenes rendered straight to
+  // video): show the scene's middle frame from the final render instead.
+  const frame = sceneFrame(s, card);
+  if (frame) {
+    const img = el("img", { src: `${thumbURL(s.project_id, frame.render.path, 640)}&t=${frame.mid.toFixed(2)}`, loading: "lazy", alt: "" });
+    img.onerror = () => { const t = img.closest(".thumb"); if (t) { t.className = "thumb missing"; t.textContent = "Không lấy được khung hình"; } };
+    return el("div", { class: "thumb" }, img, el("span", { class: "badge" }, `Khung từ ${frame.render.path.split("/").pop()}`));
+  }
   if (card.required_assets.length) return el("div", { class: "thumb missing" }, "Chưa tạo — tạo ở stage Assets");
   return el("div", { class: "thumb" }, el("div", { class: "spec-in" },
     el("div", { class: "spec-desc" }, (card.description || "").slice(0, 80))));
+}
+
+// The render a scene can be cut from: final.mp4 when present, else the
+// newest render — only once compose has run (replay hides renders before).
+function sceneFrame(s, card) {
+  const renders = s.media.renders || [];
+  if (!renders.length || card.start_seconds == null || card.end_seconds == null) return null;
+  const render = renders.find((r) => /(^|\/)final\.mp4$/i.test(r.path)) || renders[0];
+  const start = Number(card.start_seconds);
+  const end = Number(card.end_seconds);
+  if (!(end > start)) return null;
+  return { render, start, end, mid: start + (end - start) / 2 };
+}
+
+function playScene(s, card, button) {
+  const frame = sceneFrame(s, card);
+  const thumb = button.closest(".ds-sb-card").querySelector(".thumb");
+  if (!frame || !thumb) return;
+  const video = el("video", {
+    src: `${mediaURL(s.project_id, frame.render.path)}#t=${frame.start},${frame.end}`,
+    controls: "", autoplay: "", playsinline: "", preload: "auto",
+  });
+  thumb.className = "thumb";
+  thumb.replaceChildren(video);
 }
 
 function sceneTime(card) {
@@ -818,6 +850,7 @@ function sceneTime(card) {
 function sceneMethod(card) {
   const v = card.visual;
   if (v && v.exists) return v.type === "video" ? "Clip" : "Ảnh";
+  if (card.type === "character_scene") return "Nhân vật diễn hoạt";
   if (card.type === "text_card") return "Chữ động";
   if (card.type === "animation") return "Hoạt hình";
   return card.type ? humanize(card.type) : null;
@@ -839,9 +872,10 @@ function renderStoryboardTab(s) {
         el("span", { class: "top" }, el("strong", {}, `Cảnh ${i + 1}`), el("span", {}, sceneTime(card))),
         card.description || card.narration ? el("span", { class: "desc" }, card.description || card.narration) : null,
         method ? el("span", { class: "method" }, method) : null,
-        narr || card.narration ? el("span", { class: "acts" },
-          narr ? el("button", { type: "button", onclick: () => { player.src = mediaURL(s.project_id, narr.path); player.play(); } }, "▶ Nghe lời dẫn") : null,
-          card.narration ? el("button", { type: "button", onclick: () => openNarrModal(card) }, "Đọc lời dẫn") : null) : null,
+        narr || (!(card.visual && card.visual.exists) && sceneFrame(s, card)) ? el("span", { class: "acts" },
+          !(card.visual && card.visual.exists) && sceneFrame(s, card)
+            ? el("button", { type: "button", onclick: (e) => playScene(s, card, e.currentTarget) }, "▶ Phát cảnh") : null,
+          narr ? el("button", { type: "button", onclick: () => { player.src = mediaURL(s.project_id, narr.path); player.play(); } }, "♪ Nghe lời dẫn") : null) : null,
       )));
   });
   return [grid];
