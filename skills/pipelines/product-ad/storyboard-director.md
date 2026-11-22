@@ -33,8 +33,8 @@ The packshot is held on screen for seconds at full delivery size, so it must be 
 1. **Source.** Use a real photo at native resolution (the cleaned copy when the original has a watermark). A generated frame below the delivery height (e.g. muse returns ~500 px wide) is never a packshot.
 2. **Window.** Choose one rectangle at the exact delivery aspect (16:9, 9:16, 1:1) around one product. Choose it so that:
    - the whole product is inside, with its base or shadow and all its parts (knobs, stand or handle, cable if it explains a feature); no edge of the window cuts through the product;
-   - the product fills about 45–70 % of the window height;
-   - one side of the window is the calmest area of the photo. The copy goes there.
+   - the product fills about 45–60 % of the window height and sits on one third, so that at least 40 % of the window width on the other side is free of the product. The copy panel goes there and must not cover any part of the product;
+   - prefer the side that is calmest in the photo for the copy.
    Other objects from a composite may sit at the window's edges. The copy panel or a soft vignette can cover them; never paint them out.
 3. **Scale.** Resize the window to the delivery size with a single resize, upscaling at most 1.5×. If the window is smaller than 1/1.5 of the delivery size, choose a larger window with a smaller product share.
 4. **Record.** Save to `assets/storyboard/<scene>_start.png` with `source: provided`. In `notes`, give the photo, the window box `(x0, y0, x1, y1)` and the upscale factor. Measure the product box on the output with code and give its height as a % of the frame.
