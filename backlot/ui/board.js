@@ -47,16 +47,9 @@ applyTheme(currentTheme);
 // header slate
 // ---------------------------------------------------------------------------
 
-function renderSlate(s) {
-  const board = s.storyboard;
-  const chips = [
-    el("span", { class: "chip" }, `${s.pipeline.pipeline_type} pipeline`),
-    board && board.total_duration_seconds
-      ? el("span", { class: "chip" }, `${board.scenes.length} scenes · ${fmtDuration(board.total_duration_seconds)}`)
-      : null,
-    s.style_playbook ? el("span", { class: "chip" }, s.style_playbook) : null,
-  ];
-
+// Header status pill. Has a stable id so a status-only update can swap it
+// in place without rebuilding the board (see refresh()).
+function renderLivePill(s) {
   const awaiting = s.stages.find((x) => x.status === "awaiting_human");
   const inProgress = s.stages.find((x) => x.status === "in_progress");
   const stalled = s.stages.find((x) => x.stalled);
@@ -88,6 +81,21 @@ function renderSlate(s) {
     liveEl = el("span", { class: "live idle" }, el("span", { class: "dot" }),
       `IDLE${s.last_activity ? " · " + fmtAgo(s.last_activity).toUpperCase() : ""}`);
   }
+  liveEl.id = "live-pill";
+  return liveEl;
+}
+
+function renderSlate(s) {
+  const board = s.storyboard;
+  const chips = [
+    el("span", { class: "chip" }, `${s.pipeline.pipeline_type} pipeline`),
+    board && board.total_duration_seconds
+      ? el("span", { class: "chip" }, `${board.scenes.length} scenes · ${fmtDuration(board.total_duration_seconds)}`)
+      : null,
+    s.style_playbook ? el("span", { class: "chip" }, s.style_playbook) : null,
+  ];
+
+  const liveEl = renderLivePill(s);
 
   const cost = el("div", { class: "cost" });
   if (s.cost) {
@@ -1155,8 +1163,11 @@ function render() {
   if (replayBar) app.append(replayBar);
   const drawer = renderDrawer(s);
   if (drawer) app.append(drawer);
+  // Stable slot so status-only updates can swap the strip in place.
+  const studioSlot = el("div", { id: "studio-run-slot" });
   const studioRun = replay ? null : renderStudioRun(s);
-  if (studioRun) app.append(studioRun);
+  if (studioRun) studioSlot.append(studioRun);
+  app.append(studioSlot);
   const awaitingNotice = renderAwaitingNotice(s);
   if (awaitingNotice) app.append(awaitingNotice);
   const noState = renderNoState(s);
@@ -1218,9 +1229,61 @@ function normalize(s) {
   return s;
 }
 
+// Live updates without rebuilding the whole board on every disk write:
+// - nothing but run status/activity changed → swap the header pill and the
+//   Studio strip in place (Studio rewrites studio_run.json every few seconds);
+// - board content changed → full render, but never while a clip/track on
+//   the board is playing (a rebuild would reset it) — deferred until it
+//   pauses or ends.
+let renderedSig = null;
+let pendingFull = false;
+
+function contentSig(s) {
+  const { studio_run, last_activity, live, ...rest } = s;
+  return JSON.stringify(rest);
+}
+
+function boardMediaPlaying() {
+  return Array.from(app.querySelectorAll("video, audio")).some((m) => !m.paused && !m.ended);
+}
+
+function patchStatus(s) {
+  const pill = document.getElementById("live-pill");
+  if (pill) pill.replaceWith(renderLivePill(s));
+  const slot = document.getElementById("studio-run-slot");
+  if (slot) {
+    const strip = replay ? null : renderStudioRun(s);
+    slot.replaceChildren(...(strip ? [strip] : []));
+  }
+}
+
+function fullRender() {
+  pendingFull = false;
+  renderedSig = contentSig(state);
+  render();
+}
+
 async function refresh() {
   state = normalize(await getJSON(`/api/project/${encodeURIComponent(projectId)}/state`));
-  render();
+  const changed = contentSig(state) !== renderedSig;
+  if (replay) {
+    if (changed) fullRender();
+    return;
+  }
+  if (!changed && !pendingFull) {
+    patchStatus(state);
+  } else if (boardMediaPlaying()) {
+    pendingFull = true;
+    patchStatus(state);
+  } else {
+    fullRender();
+  }
+}
+
+for (const type of ["pause", "ended"]) {
+  document.addEventListener(type, () => {
+    if (pendingFull && !boardMediaPlaying()) fullRender();
+  }, true);
 }
 
 refresh().catch((err) => {
