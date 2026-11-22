@@ -573,6 +573,62 @@ def _find_poster(project_dir: Path, state: dict) -> Optional[str]:
     return None
 
 
+# ---------------------------------------------------------------------------
+# Studio run sidecar (OpenMontage Studio writes <project>/studio_run.json)
+# ---------------------------------------------------------------------------
+
+STUDIO_RUN_FILE = "studio_run.json"
+STUDIO_RUN_STATUSES = {
+    "queued", "running", "waiting_approval", "succeeded", "failed", "cancelled",
+}
+STUDIO_RUN_ACTIVE = {"queued", "running"}
+_STUDIO_RUN_STR_KEYS = {
+    "run_id": 64, "stage": 64, "pending_gate": 64, "agent_id": 64,
+    "agent_label": 80, "model": 64, "queued_at": 40, "started_at": 40,
+    "ended_at": 40, "last_event_at": 40, "last_event": 200, "error": 400,
+    "studio_url": 400, "updated_at": 40,
+}
+
+
+def _iso_epoch(value: Any) -> Optional[float]:
+    """ISO-8601 (``Z`` or offset; naive = UTC) → epoch seconds, else None."""
+    if not isinstance(value, str) or not value:
+        return None
+    from datetime import datetime, timezone
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.timestamp()
+
+
+def read_studio_run(project_dir: Path) -> Optional[dict[str, Any]]:
+    """Sanitised view of ``studio_run.json`` or None (missing/invalid).
+
+    Only whitelisted keys survive, strings are length-capped and
+    ``studio_url`` must be http(s) — the board renders this file verbatim.
+    """
+    raw = _read_json(Path(project_dir) / STUDIO_RUN_FILE)
+    if not raw or raw.get("status") not in STUDIO_RUN_STATUSES:
+        return None
+    out: dict[str, Any] = {"status": raw["status"]}
+    for key, cap in _STUDIO_RUN_STR_KEYS.items():
+        val = raw.get(key)
+        out[key] = val[:cap] if isinstance(val, str) and val else None
+    for key in ("run_number", "queue_position"):
+        val = raw.get(key)
+        out[key] = val if isinstance(val, int) and not isinstance(val, bool) and val >= 0 else None
+    out["live"] = raw.get("live") is True
+    url = out.get("studio_url") or ""
+    if not url.startswith(("http://", "https://")):
+        out["studio_url"] = None
+    for key in ("queued_at", "started_at", "ended_at", "last_event_at", "updated_at"):
+        out[f"{key}_epoch"] = _iso_epoch(out.get(key))
+    return out
+
+
 def _last_activity(project_dir: Path) -> float:
     """Most recent mtime among state-bearing files (bounded scan)."""
     latest = 0.0
@@ -636,7 +692,29 @@ def load_board_state(project_dir: Path) -> dict[str, Any]:
 
     import time
     last_activity = _last_activity(project_dir)
+    disk_activity = last_activity
     now = time.time()
+
+    # Studio run sidecar: real run events (start, log lines, gate, end) count
+    # as activity, so a run that has not written a checkpoint yet still reads
+    # live; a running agent that went quiet is flagged like a stalled stage.
+    studio_run = read_studio_run(project_dir)
+    if studio_run:
+        studio_ts = max(
+            (studio_run.get(k) or 0)
+            for k in ("updated_at_epoch", "last_event_at_epoch", "started_at_epoch")
+        )
+        # never trust a future timestamp from a skewed clock
+        if studio_ts and studio_ts <= now + 60:
+            last_activity = max(last_activity, studio_ts)
+        if studio_run["status"] == "running":
+            quiet_since = (
+                studio_run.get("last_event_at_epoch")
+                or studio_run.get("started_at_epoch")
+                or studio_ts
+            )
+            if quiet_since and (now - quiet_since) > STALL_WINDOW_SECONDS:
+                studio_run["stalled_minutes"] = int((now - quiet_since) / 60)
 
     # Stall detection: an in_progress stage that stopped writing anything.
     for stage_entry in stages:
@@ -647,6 +725,12 @@ def load_board_state(project_dir: Path) -> dict[str, Any]:
         ):
             stage_entry["stalled"] = True
             stage_entry["stalled_minutes"] = int((now - last_activity) / 60)
+
+    # live = agent working now: a running Studio run, or recent writes. A
+    # queued run's own bookkeeping is not live work — only disk writes count.
+    status = (studio_run or {}).get("status")
+    live_ref = disk_activity if status == "queued" else last_activity
+    live = status == "running" or bool(live_ref and (now - live_ref) < LIVE_WINDOW_SECONDS)
 
     state: dict[str, Any] = {
         "project_id": project_id,
@@ -664,7 +748,8 @@ def load_board_state(project_dir: Path) -> dict[str, Any]:
         "events": events,
         "cost": cost,
         "last_activity": last_activity,
-        "live": bool(last_activity and (now - last_activity) < LIVE_WINDOW_SECONDS),
+        "live": live,
+        "studio_run": studio_run,
     }
     state["poster"] = _find_poster(project_dir, state)
     return state
@@ -706,6 +791,7 @@ def summarize_project(project_dir: Path) -> dict[str, Any]:
         "completed_count": len(done),
         "render_count": len(state["media"]["renders"]),
         "scene_count": len((state["storyboard"] or {}).get("scenes", [])),
+        "studio_status": (state.get("studio_run") or {}).get("status"),
     }
 
 

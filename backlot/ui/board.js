@@ -60,8 +60,24 @@ function renderSlate(s) {
   const awaiting = s.stages.find((x) => x.status === "awaiting_human");
   const inProgress = s.stages.find((x) => x.status === "in_progress");
   const stalled = s.stages.find((x) => x.stalled);
+  const run = s.studio_run;
   let liveEl;
-  if (awaiting) {
+  if (run && run.status === "waiting_approval") {
+    liveEl = el("span", { class: "live" }, el("span", { class: "dot" }),
+      `◈ AWAITING YOU${run.pending_gate ? " · " + run.pending_gate.toUpperCase() : ""}`);
+  } else if (run && run.status === "running" && run.stalled_minutes) {
+    liveEl = el("span", { class: "live", style: "color:var(--red)" },
+      el("span", { class: "dot", style: "background:var(--red);animation:none" }),
+      `⚠ QUIET ${run.stalled_minutes}M`);
+  } else if (run && run.status === "running") {
+    liveEl = el("span", { class: "live" }, el("span", { class: "dot" }), "RUNNING");
+  } else if (run && run.status === "queued") {
+    liveEl = el("span", { class: "live idle" }, el("span", { class: "dot" }),
+      `QUEUED${run.queue_position ? " #" + run.queue_position : ""}`);
+  } else if (run && run.status === "failed" && !inProgress && !awaiting) {
+    liveEl = el("span", { class: "live", style: "color:var(--red)" },
+      el("span", { class: "dot", style: "background:var(--red);animation:none" }), "FAILED");
+  } else if (awaiting) {
     liveEl = el("span", { class: "live" }, el("span", { class: "dot" }), "◈ AWAITING YOU");
   } else if (stalled) {
     liveEl = el("span", { class: "live", style: "color:var(--red)" },
@@ -871,8 +887,79 @@ function renderFoundMedia(s) {
     grid);
 }
 
+// Studio run strip — OpenMontage Studio writes studio_run.json next to the
+// checkpoints, so the board knows a run is queued/running/at a gate/failed
+// even before the agent writes its first checkpoint.
+const STUDIO_STATUS_TEXT = {
+  queued: "đang xếp hàng",
+  running: "đang chạy",
+  waiting_approval: "chờ bạn duyệt",
+  succeeded: "đã xong",
+  failed: "lỗi",
+  cancelled: "đã huỷ",
+};
+
+function fmtSince(epoch) {
+  if (!epoch) return "";
+  const d = Math.max(0, Math.round(Date.now() / 1000 - epoch));
+  if (d < 60) return `${d} giây`;
+  if (d < 3600) return `${Math.floor(d / 60)} phút`;
+  return `${Math.floor(d / 3600)} giờ ${Math.floor((d % 3600) / 60)} phút`;
+}
+
+function renderStudioRun(s) {
+  const run = s.studio_run;
+  if (!run) return null;
+  const color = run.status === "failed" || run.stalled_minutes ? "var(--red)"
+    : run.status === "running" || run.status === "waiting_approval" ? "var(--amber)"
+    : "var(--text-3)";
+  const who = [run.agent_label || run.agent_id, run.model].filter(Boolean).join(" · ");
+  let status = STUDIO_STATUS_TEXT[run.status] || run.status;
+  if (run.status === "queued" && run.queue_position) status += ` (vị trí ${run.queue_position})`;
+  if (run.status === "waiting_approval" && run.pending_gate) status += ` · ${run.pending_gate}`;
+  const timing = run.status === "running" && run.started_at_epoch
+    ? ` · đã chạy ${fmtSince(run.started_at_epoch)}`
+    : run.status === "queued" && run.queued_at_epoch
+      ? ` · chờ ${fmtSince(run.queued_at_epoch)}`
+      : "";
+  const parts = [
+    el("b", { style: `color:${color}` },
+      `Studio · Run #${run.run_number ?? "?"} ${status}`),
+    `${who ? " · " + who : ""}${timing}`,
+  ];
+  if (run.last_event && (run.status === "running" || run.status === "queued")) {
+    parts.push(el("br", {}), "Hoạt động cuối: ",
+      el("code", {}, run.last_event),
+      run.last_event_at_epoch ? ` (${fmtSince(run.last_event_at_epoch)} trước)` : "");
+  }
+  if (run.stalled_minutes) {
+    parts.push(el("br", {}), el("b", { style: "color:var(--red)" },
+      `Agent im lặng ${run.stalled_minutes} phút — kiểm tra log trong Studio.`));
+  }
+  if (run.status === "failed" && run.error) {
+    parts.push(el("br", {}), el("span", { style: "color:var(--red)" }, run.error));
+  }
+  if (run.studio_url) {
+    parts.push(" ", el("a", { href: run.studio_url, target: "_blank", rel: "noopener",
+      style: "color:var(--amber)" }, "Mở trong Studio ↗"));
+  }
+  return el("div", { class: "notice", style: `border-color:${color}` },
+    el("span", { style: "font-size:calc(15px * var(--fs-scale))" },
+      run.status === "running" ? "●" : run.status === "failed" ? "⚠" : "◌"),
+    el("span", {}, ...parts));
+}
+
 function renderNoState(s) {
   if (s.has_pipeline_state) return null;
+  const run = s.studio_run;
+  if (run && (run.status === "running" || run.status === "queued")) {
+    return el("div", { class: "notice", style: "border-color:#2b2b33;background:var(--surface-2);color:var(--text-3)" },
+      el("span", { style: "font-size:calc(15px * var(--fs-scale))" }, "◌"),
+      el("span", {},
+        el("b", { style: "color:var(--text-2)" },
+          run.status === "queued" ? "Run đang xếp hàng. " : "Agent đang chuẩn bị… "),
+        "Chưa có checkpoint nào — các bước sẽ sáng dần khi agent ghi kết quả từng stage."));
+  }
   return el("div", { class: "notice", style: "border-color:#2b2b33;background:var(--surface-2);color:var(--text-3)" },
     el("span", { style: "font-size:calc(15px * var(--fs-scale))" }, "◌"),
     el("span", {},
@@ -1068,6 +1155,8 @@ function render() {
   if (replayBar) app.append(replayBar);
   const drawer = renderDrawer(s);
   if (drawer) app.append(drawer);
+  const studioRun = replay ? null : renderStudioRun(s);
+  if (studioRun) app.append(studioRun);
   const awaitingNotice = renderAwaitingNotice(s);
   if (awaitingNotice) app.append(awaitingNotice);
   const noState = renderNoState(s);
@@ -1143,4 +1232,10 @@ refresh().catch((err) => {
 // ?static=1 disables the live feed (screenshots, static exports).
 if (!new URLSearchParams(location.search).has("static")) {
   subscribe(`/api/project/${encodeURIComponent(projectId)}/events`, () => refresh().catch(console.error));
+  // Elapsed/quiet timers on the Studio strip only change with the clock, not
+  // with disk events — refetch every 30 s while a Studio run is active.
+  setInterval(() => {
+    const st = state && state.studio_run && state.studio_run.status;
+    if (!replay && (st === "running" || st === "queued")) refresh().catch(console.error);
+  }, 30000);
 }

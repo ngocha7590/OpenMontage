@@ -51,8 +51,14 @@ function card(p) {
     poster.append(el("span", { class: "lp-live" },
       el("span", { class: "dot" }),
       p.awaiting_human ? "◈ AWAITING YOU" : `LIVE · ${p.active_stage.toUpperCase()}`));
-  } else if (p.awaiting_human) {
+  } else if (p.awaiting_human || p.studio_status === "waiting_approval") {
     poster.append(el("span", { class: "lp-live" }, "◈ AWAITING YOU"));
+  } else if (p.studio_status === "running") {
+    poster.append(el("span", { class: "lp-live" }, el("span", { class: "dot" }), "RUNNING"));
+  } else if (p.studio_status === "queued") {
+    poster.append(el("span", { class: "lp-live" }, "QUEUED"));
+  } else if (p.studio_status === "failed") {
+    poster.append(el("span", { class: "lp-live", style: "color:var(--red)" }, "FAILED"));
   }
 
   const meta = el("div", { class: "lb-meta" },
