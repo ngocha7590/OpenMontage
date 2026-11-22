@@ -189,3 +189,17 @@ def test_rig_stills_pick_evenly_spaced_frames(project):
 
 def test_no_rig_frames_means_no_stills(project):
     assert load_board_state(project)["media"]["rig_stills"] == []
+
+
+def test_pipeline_artifact_file_beats_checkpoint_copy(project):
+    stale = {"version": "1.0", "characters": [{"id": "baby", "role": "r", "body_type": "b", "style": "s",
+                                               "required_emotions": [], "required_actions": []}]}
+    (project / "checkpoint_character_design.json").write_text(json.dumps({
+        "version": "1.0", "project_id": project.name, "stage": "character_design", "status": "completed",
+        "pipeline_type": "character-animation", "timestamp": datetime.now(timezone.utc).isoformat(),
+        "artifacts": {"character_design": stale}}), encoding="utf-8")
+    fresh = json.loads(json.dumps(stale))
+    fresh["characters"][0]["reference_images"] = [{"path": "assets/characters/baby_front.png"}]
+    (project / "artifacts" / "character_design.json").write_text(json.dumps(fresh), encoding="utf-8")
+    cd = load_board_state(project)["artifacts"]["character_design"]
+    assert cd["characters"][0]["reference_images"][0]["path"] == "assets/characters/baby_front.png"

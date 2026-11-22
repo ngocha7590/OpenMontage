@@ -251,6 +251,15 @@ def _collect_artifacts(project_dir: Path, checkpoints: dict[str, dict]) -> dict[
         data = _read_json(art_dir / filename)
         if data is not None:
             artifacts[name] = data
+    # Pipeline-specific artifacts (character_design, rig_plan, …) also live in
+    # artifacts/<name>.json; the file on disk is fresher than the copy a
+    # checkpoint embedded (tools may update it in place, e.g. reference images).
+    if art_dir.is_dir():
+        for path in sorted(art_dir.glob("*.json"))[:64]:
+            if path.stem not in artifacts:
+                data = _read_json(path)
+                if data is not None:
+                    artifacts[path.stem] = data
     # decision_log historically also lives at project root
     if "decision_log" not in artifacts:
         data = _read_json(project_dir / "decision_log.json")

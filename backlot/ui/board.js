@@ -907,6 +907,12 @@ function collectMedia(s) {
       add(a.type === "music" ? "music" : "narration", a.path, [label, a.source_tool, a.duration_seconds ? fmtDuration(a.duration_seconds) : null].filter(Boolean).join(" · "));
     }
   });
+  const design = s.artifacts.character_design;
+  for (const c of (design && Array.isArray(design.characters) ? design.characters : [])) {
+    for (const r of (c.reference_images || []).filter((x) => x && x.path)) {
+      add("image", r.path, ["Nhân vật", c.display_name || c.id, r.provider || r.source_tool].filter(Boolean).join(" · "));
+    }
+  }
   for (const m of s.media.music || []) add("music", m.path, "Nhạc");
   for (const snap of s.media.snapshots || []) add("image", snap.path, "Snapshot");
   return items;
@@ -1096,12 +1102,13 @@ function renderCast(s, { compact = false } = {}) {
       el("figure", {},
         el("img", { src: thumbURL(s.project_id, f.path, 640), loading: "lazy", alt: "Khung hình rig nhân vật" }),
         el("figcaption", {}, f.path.split("/").pop())))));
-  } else {
+  } else if (!chars.some((c) => (c.reference_images || []).length)) {
     wrap.append(el("p", { class: "ds-p", style: "font-size:13px;color:var(--ds-muted)" },
-      "Chưa có hình: nhân vật được dựng thành rig SVG và chỉ có hình khi agent vẽ khung rig (stage Compose)."));
+      "Chưa có hình: agent chưa tạo ảnh tham chiếu nhân vật, và rig chỉ có hình khi được vẽ ở stage Compose."));
   }
   if (chars.length) {
     wrap.append(el("div", { class: "ds-cast-grid" }, chars.map((c) => el("article", { class: "ds-cast-card" },
+      castRef(s, c),
       el("span", { class: "top" }, el("strong", {}, c.display_name || c.id), c.id && c.display_name ? el("span", {}, c.id) : null),
       c.role ? el("span", { class: "role" }, c.role) : null,
       !compact && c.silhouette_notes ? el("span", { class: "notes" }, c.silhouette_notes) : null,
@@ -1112,6 +1119,16 @@ function renderCast(s, { compact = false } = {}) {
     ))));
   }
   return wrap;
+}
+
+// Reference image made at character_design (character_reference_sheet).
+function castRef(s, c) {
+  const ref = (c.reference_images || []).find((r) => r && r.path);
+  if (!ref) return null;
+  const img = el("img", { src: thumbURL(s.project_id, ref.path, 640), loading: "lazy", alt: `Ảnh tham chiếu ${c.display_name || c.id}` });
+  img.onerror = () => { const f = img.closest(".ref"); if (f) f.remove(); };
+  return el("a", { class: "ref", href: mediaURL(s.project_id, ref.path), target: "_blank", rel: "noopener",
+    title: [ref.view, ref.provider || ref.source_tool].filter(Boolean).join(" · ") }, img);
 }
 
 function renderBrief(s) {

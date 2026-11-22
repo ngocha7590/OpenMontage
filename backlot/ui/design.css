@@ -287,6 +287,8 @@ button { font: inherit; }
 .ds-cast-stills figcaption { font-family: var(--ds-mono); font-size: 11px; color: var(--ds-muted-3); }
 .ds-cast-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
 .ds-cast-card { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; border-radius: 12px; background: var(--ds-card-2); border: 1px solid var(--ds-border); font-size: 13px; }
+.ds-cast-card .ref { display: block; margin: -12px -14px 4px; border-bottom: 1px solid var(--ds-border); background: #F4F1EA; }
+.ds-cast-card .ref img { display: block; width: 100%; aspect-ratio: 1 / 1; object-fit: contain; }
 .ds-cast-card .top { display: flex; justify-content: space-between; gap: 8px; font-size: 14px; }
 .ds-cast-card .top span { font-family: var(--ds-mono); font-size: 12px; color: var(--ds-muted-3); }
 .ds-cast-card .role { color: var(--ds-text-2); }

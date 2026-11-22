@@ -24,6 +24,7 @@ from tools.base_tool import (
     ResourceProfile,
     ToolResult,
     ToolStability,
+    ToolStatus,
     ToolTier,
 )
 
@@ -179,6 +180,178 @@ class CharacterSpecGenerator(BaseTool):
             success=True,
             data={"character_design": artifact},
             artifacts=artifacts,
+            duration_seconds=round(time.time() - start, 2),
+        )
+
+
+def _reference_prompt(character: dict[str, Any], style: dict[str, Any], view: str) -> str:
+    """Prompt for one character reference sheet: full body, one view, plain
+    background, the design's style + palette — a review aid, not a rig input."""
+    name = character.get("display_name") or character.get("id") or "character"
+    parts = [
+        f"Character reference sheet of {name}",
+        character.get("role") or "",
+        character.get("body_type") or "",
+        character.get("silhouette_notes") or "",
+        f"props: {', '.join(character['props'])}" if character.get("props") else "",
+        f"full body, {view} view, neutral standing pose, centered, plain light background, no text, no watermark",
+        f"style: {style.get('visual_style') or character.get('style') or 'cartoon'}",
+        f"line: {style['line_style']}" if style.get("line_style") else "",
+        f"palette: {', '.join(style['palette'])}" if style.get("palette") else "",
+    ]
+    return ". ".join(p.strip().rstrip(".") for p in parts if p and p.strip()) + "."
+
+
+class CharacterReferenceSheet(BaseTool):
+    """One reference image per character (and view) at the character_design
+    stage, through ``image_selector`` — so the cast can be reviewed before the
+    rig exists. Records the images in ``characters[].reference_images``."""
+
+    name = "character_reference_sheet"
+    version = "0.1.0"
+    tier = ToolTier.CORE
+    capability = "character_animation"
+    provider = "openmontage"
+    stability = ToolStability.BETA
+    execution_mode = ExecutionMode.SYNC
+    determinism = Determinism.STOCHASTIC
+    resource_profile = ResourceProfile(cpu_cores=1, ram_mb=256, vram_mb=0, disk_mb=50)
+    agent_skills = ["character-rigging"]
+    capabilities = ["character_reference_images", "character_sheet"]
+    best_for = ["Reviewable character reference images before rigging (character_design gate)"]
+    not_good_for = ["Rig parts or animation frames — the SVG rig is built from the spec, not these images"]
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "character_design": {"type": "object", "description": "character_design artifact (or pass character_design_path)"},
+            "character_design_path": {"type": "string"},
+            "workspace_path": {"type": "string", "description": "Project directory; images go to <workspace>/assets/characters"},
+            "characters": {"type": "array", "items": {"type": "string"}, "description": "Only these character ids (default: all)"},
+            "views": {"type": "array", "items": {"type": "string"}, "description": "Default: each character's first required view, else front"},
+            "aspect_ratio": {"type": "string", "default": "1:1"},
+            "preferred_provider": {"type": "string"},
+            "allowed_providers": {"type": "array", "items": {"type": "string"}},
+            "overwrite": {"type": "boolean", "default": False},
+            "output_path": {"type": "string", "description": "Write the updated character_design JSON here"},
+        },
+    }
+    output_schema = {
+        "type": "object",
+        "properties": {
+            "character_design": {"type": "object"},
+            "generated": {"type": "array"},
+            "failed": {"type": "array"},
+        },
+    }
+    artifact_schema = {"artifact": "character_design"}
+    side_effects = [
+        "writes images to <workspace>/assets/characters/",
+        "calls image_selector (may spend on paid providers)",
+        "optionally writes the updated character_design JSON to output_path",
+    ]
+    user_visible_verification = ["Look at each character's reference image at the character_design gate"]
+
+    @staticmethod
+    def _selector() -> BaseTool | None:
+        from tools.tool_registry import registry
+
+        registry.ensure_discovered()
+        return registry.get("image_selector")
+
+    def get_status(self) -> ToolStatus:
+        selector = self._selector()
+        if selector is None:
+            return ToolStatus.UNAVAILABLE
+        return selector.get_status()
+
+    def execute(self, inputs: dict[str, Any]) -> ToolResult:
+        start = time.time()
+        design = inputs.get("character_design")
+        if design is None and inputs.get("character_design_path"):
+            design = json.loads(Path(inputs["character_design_path"]).read_text(encoding="utf-8"))
+        if not isinstance(design, dict) or not design.get("characters"):
+            return ToolResult(success=False, error="character_design with characters is required")
+        workspace = inputs.get("workspace_path")
+        if not workspace:
+            return ToolResult(success=False, error="workspace_path (project directory) is required")
+        workspace_dir = Path(workspace).resolve()
+        out_dir = workspace_dir / "assets" / "characters"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        selector = self._selector()
+        if selector is None:
+            return ToolResult(success=False, error="image_selector is not registered")
+
+        design = json.loads(json.dumps(design))  # never mutate the caller's dict
+        style = design.get("style") or {}
+        only = set(inputs.get("characters") or [])
+        generated: list[dict[str, Any]] = []
+        failed: list[dict[str, Any]] = []
+        written: list[str] = []
+        cost = 0.0
+        for character in design["characters"]:
+            cid = character.get("id")
+            if only and cid not in only:
+                continue
+            views = inputs.get("views") or (character.get("required_views") or ["front"])[:1]
+            refs = [r for r in character.get("reference_images", []) if isinstance(r, dict)]
+            for view in views:
+                target = out_dir / f"{_slug(str(cid))}_{_slug(str(view))}.png"
+                rel = target.relative_to(workspace_dir).as_posix()
+                if target.is_file() and not inputs.get("overwrite"):
+                    if not any(r.get("path") == rel for r in refs):
+                        refs.append({"path": rel, "view": view})
+                    generated.append({"character": cid, "view": view, "path": rel, "skipped": "exists"})
+                    continue
+                prompt = _reference_prompt(character, style, view)
+                request: dict[str, Any] = {
+                    "prompt": prompt,
+                    "output_path": str(target),
+                    "aspect_ratio": inputs.get("aspect_ratio", "1:1"),
+                }
+                if inputs.get("preferred_provider"):
+                    request["preferred_provider"] = inputs["preferred_provider"]
+                # image_selector picks one provider and does not fall back; with
+                # an allowed list, try each provider in order until one works
+                # (e.g. a logged-out web gateway must not sink the whole cast).
+                attempts = [[p] for p in inputs.get("allowed_providers") or []] or [None]
+                errors: list[str] = []
+                result = None
+                for allowed in attempts:
+                    attempt = dict(request, allowed_providers=allowed) if allowed else dict(request)
+                    result = selector.execute(attempt)
+                    if result.success and target.is_file():
+                        break
+                    errors.append(f"{allowed[0] + ': ' if allowed else ''}{result.error or 'no image written'}")
+                    result = None
+                if result is None:
+                    failed.append({"character": cid, "view": view, "error": " | ".join(errors)})
+                    continue
+                cost += float(result.cost_usd or 0.0)
+                entry = {
+                    "path": rel,
+                    "view": view,
+                    "prompt": prompt,
+                    "source_tool": str(result.data.get("selected_tool") or "image_selector"),
+                }
+                if result.data.get("selected_provider"):
+                    entry["provider"] = str(result.data["selected_provider"])
+                if result.model:
+                    entry["model"] = str(result.model)
+                refs = [r for r in refs if r.get("path") != rel] + [entry]
+                written.append(str(target))
+                generated.append({"character": cid, "view": view, "path": rel})
+            if refs:
+                character["reference_images"] = refs
+
+        validate_artifact("character_design", design)
+        artifacts = written + _write_json(inputs.get("output_path"), design)
+        ok = bool(generated)
+        return ToolResult(
+            success=ok,
+            data={"character_design": design, "generated": generated, "failed": failed},
+            artifacts=artifacts,
+            error=None if ok else "; ".join(f"{f['character']}/{f['view']}: {f['error']}" for f in failed) or "nothing generated",
+            cost_usd=round(cost, 4),
             duration_seconds=round(time.time() - start, 2),
         )
 

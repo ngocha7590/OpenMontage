@@ -140,6 +140,7 @@ stages:
       - character_design
     tools_available:
       - character_spec_generator
+      - character_reference_sheet
       - image_selector
     checkpoint_required: true
     human_approval_default: true
@@ -150,6 +151,7 @@ stages:
     success_criteria:
       - Schema-valid character_design
       - Every main character has required emotions, actions, and views
+      - Every main character has a reference image (character_reference_sheet) when an image provider is available; otherwise the gap is logged in decision_log
 
   - name: rig_plan
     skill: pipelines/character-animation/rig-plan-director
