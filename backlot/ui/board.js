@@ -1,7 +1,7 @@
 // Backlot project board — renders BoardState and stays live via SSE.
 
 import {
-  el, fmtAgo, fmtClock, fmtDuration, fmtMoney,
+  STAGE_ICONS, el, fmtAgo, fmtClock, fmtDuration, fmtMoney,
   getJSON, mediaURL, subscribe, thumbURL, waveBars,
 } from "/ui/lib.js";
 
@@ -63,8 +63,7 @@ function renderLivePill(s) {
       el("span", { class: "dot", style: "background:var(--red);animation:none" }),
       `⚠ QUIET ${run.stalled_minutes}M`);
   } else if (run && run.status === "running") {
-    liveEl = el("span", { class: "live", style: "color:var(--blue)" },
-      el("span", { class: "dot", style: "background:var(--blue)" }), "RUNNING");
+    liveEl = el("span", { class: "live" }, el("span", { class: "dot" }), "RUNNING");
   } else if (run && run.status === "queued") {
     liveEl = el("span", { class: "live idle" }, el("span", { class: "dot" }),
       `QUEUED${run.queue_position ? " #" + run.queue_position : ""}`);
@@ -136,114 +135,73 @@ function renderSlate(s) {
 // stage rail
 // ---------------------------------------------------------------------------
 
-// Stage rail — follows the Studio design (docs/design/mockups/Board.dc.html):
-// dot + label + status word; ✓ done, ◆ waiting for you, ● running (pulse),
-// … queued, empty dot for not-started. Times/versions live in the tooltip.
-function stageLabel(name) {
-  const t = String(name || "").replace(/[_-]+/g, " ").trim();
-  return t ? t.charAt(0).toUpperCase() + t.slice(1) : "";
-}
-
-// Studio run state fills gaps the checkpoints leave: a queued run marks the
-// next stage "Xếp hàng", a Studio gate marks its stage "Chờ bạn duyệt".
-function railKinds(s) {
-  const declared = s.stages.filter((x) => !x.undeclared);
-  const run = s.studio_run;
-  const kinds = new Map();
-  for (const st of s.stages) {
-    kinds.set(st.name,
-      st.status === "completed" ? "done"
-        : st.status === "awaiting_human" ? "await"
-        : st.status === "failed" ? "failed"
-        : st.status === "in_progress" ? (st.stalled ? "stalled" : "run")
-        : st.current ? "run"
-        : "todo");
+function stageSub(st) {
+  if (st.status === "awaiting_human") return "awaiting your approval\nreply in chat to continue";
+  if (st.status === "in_progress" && st.stalled) {
+    return `stalled? no activity for ${st.stalled_minutes}m\nask the agent for status`;
   }
-  const busy = [...kinds.values()].some((k) => k === "await" || k === "run" || k === "stalled");
-  if (run && !busy) {
-    if (run.status === "waiting_approval" && run.pending_gate && kinds.has(run.pending_gate)
-        && kinds.get(run.pending_gate) !== "done") {
-      kinds.set(run.pending_gate, "await");
-    } else if (run.status === "queued") {
-      const lastDone = declared.reduce((acc, x, i) => (kinds.get(x.name) === "done" ? i : acc), -1);
-      const next = declared.slice(lastDone + 1).find((x) => kinds.get(x.name) === "todo");
-      if (next) kinds.set(next.name, "queue");
-    }
+  if (st.status === "in_progress" && st.partial_progress) {
+    const done = st.partial_progress.completed_scene_ids;
+    if (Array.isArray(done)) return `${done.length} scene${done.length === 1 ? "" : "s"} done`;
+    return "in progress";
   }
-  return kinds;
-}
-
-const RAIL_MARK = { done: "✓", await: "◆", run: "●", queue: "…", failed: "✕", stalled: "!", todo: "" };
-
-function railSub(st, kind) {
-  switch (kind) {
-    case "done": return st.gated && st.human_approved ? "Đã duyệt" : "Xong";
-    case "await": return "Chờ bạn duyệt";
-    case "queue": return "Xếp hàng";
-    case "failed": return "Lỗi";
-    case "stalled": return `Im lặng ${st.stalled_minutes || "?"} phút`;
-    case "run": {
-      const done = st.partial_progress && st.partial_progress.completed_scene_ids;
-      if (Array.isArray(done)) return `Đang chạy · ${done.length} cảnh xong`;
-      if (st.current_tool) return `Đang chạy\n${st.current_tool}`;
-      return st.current && st.current_source === "next" ? "Đang chạy\n(ước đoán)" : "Đang chạy";
-    }
-    default: return st.gated ? "Cần duyệt" : "—";
+  if (st.status === "in_progress") return "in progress";
+  if (st.current) {
+    if (st.current_tool) return `đang chạy\n${st.current_tool}`;
+    return "đang chạy\n(ước đoán)";
   }
-}
-
-function railTitle(st) {
-  const bits = [st.name];
-  if (st.timestamp) bits.push(fmtClock(st.timestamp));
-  if (st.versions > 1) bits.push(`${st.versions} phiên bản`);
-  if (st.error) bits.push(String(st.error).slice(0, 160));
-  if (st.undeclared) bits.push("không có trong manifest của pipeline");
-  return bits.join(" · ");
+  if (st.status === "failed") return st.error ? String(st.error).slice(0, 60) : "failed";
+  if (st.timestamp) {
+    const approved = st.gated && st.human_approved ? " · approved" : "";
+    return fmtClock(st.timestamp) + approved;
+  }
+  return "";
 }
 
 function renderRail(s) {
-  const rail = el("ol", { class: "rail", "aria-label": "Tiến trình pipeline" });
-  const kinds = railKinds(s);
+  const rail = el("nav", { class: "rail" });
+  let pendingIndex = 1;
   for (const st of s.stages) {
-    const kind = kinds.get(st.name) || "todo";
-    const cls = { done: "done", await: "await", run: st.current ? "active inferred" : "active",
-      queue: "queue", failed: "failed", stalled: "active stalled", todo: "" }[kind];
-    const current = kind === "await" || kind === "run" || kind === "queue" || kind === "stalled";
-    const node = el("li", {
+    const cls = st.status === "completed" ? "done"
+      : st.status === "in_progress" ? (st.stalled ? "active stalled" : "active")
+      : st.status === "awaiting_human" ? "await"
+      : st.status === "failed" ? "failed"
+      : st.current ? "active inferred" : "";
+    const icon = STAGE_ICONS[st.status] || String(pendingIndex);
+    if (!STAGE_ICONS[st.status]) pendingIndex += 1;
+    const node = el("div", {
       class: `stage ${cls}${selectedStage === st.name ? " selected" : ""}${st.undeclared ? " undeclared" : ""}`,
-      title: railTitle(st),
-      "aria-current": current ? "step" : null,
-      tabindex: "0",
+      title: st.undeclared ? `"${st.name}" ran but isn't declared by this pipeline's manifest` : null,
       onclick: () => toggleDrawer(st.name),
-      onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleDrawer(st.name); } },
     },
-      el("span", { class: "line", "aria-hidden": "true" }),
-      el("span", { class: "node", "aria-hidden": "true" }, RAIL_MARK[kind]),
-      el("span", { class: "name" }, stageLabel(st.name)),
-      el("span", { class: "sub", style: "white-space:pre-line" }, railSub(st, kind)),
+      el("span", { class: "line" }),
+      el("span", { class: "node" }, icon),
+      el("span", { class: "name" }, st.name),
+      el("span", { class: "sub", style: "white-space:pre-line" },
+        st.undeclared ? `${stageSub(st)}\nunlisted`.trim() : stageSub(st)),
     );
     rail.append(node);
   }
-  return el("div", { class: "rail-wrap" }, rail, renderProgress(s, kinds));
+  return el("div", { class: "rail-wrap" }, rail, renderProgress(s));
 }
 
 // Overall progress under the rail: completed / declared stages, half a step
 // for the one being worked on; striped + moving while a run is active.
-function renderProgress(s, kinds) {
+function renderProgress(s) {
   const stages = s.stages.filter((x) => !x.undeclared);
   if (!stages.length) return null;
-  const kindOf = (x) => (kinds && kinds.get(x.name)) || "todo";
-  const done = stages.filter((x) => kindOf(x) === "done").length;
-  const current = stages.find((x) => ["run", "stalled", "await", "queue"].includes(kindOf(x)));
-  const ck = current ? kindOf(current) : null;
-  const running = ck === "run" || ck === "stalled";
-  const pct = Math.min(100, Math.round(((done + (running || ck === "await" ? 0.5 : 0)) / stages.length) * 100));
+  const done = stages.filter((x) => x.status === "completed").length;
+  const current = stages.find((x) =>
+    x.status === "in_progress" || x.status === "awaiting_human" || x.current);
+  const run = s.studio_run;
+  const running = (run && run.status === "running") || Boolean(current && current.status !== "awaiting_human");
+  const pct = Math.min(100, Math.round(((done + (current ? 0.5 : 0)) / stages.length) * 100));
   let label = `${done}/${stages.length} bước xong`;
   if (current) {
-    const verb = { run: "đang chạy", stalled: "im lặng", await: "chờ bạn duyệt", queue: "xếp hàng" }[ck];
+    const verb = current.status === "awaiting_human" ? "chờ duyệt" : "đang chạy";
     const guess = current.current && current.current_source === "next" ? " (ước đoán)" : "";
-    const tool = running && current.current_tool ? ` · ${current.current_tool}` : "";
-    label += ` · ${verb}: ${stageLabel(current.name)}${tool}${guess}`;
+    const tool = current.current_tool ? ` · ${current.current_tool}` : "";
+    label += ` · ${verb}: ${current.name}${tool}${guess}`;
   } else if (done === stages.length) {
     label += " · hoàn tất";
   }
@@ -993,8 +951,7 @@ function renderStudioRun(s) {
   const run = s.studio_run;
   if (!run) return null;
   const color = run.status === "failed" || run.stalled_minutes ? "var(--red)"
-    : run.status === "running" ? "var(--blue)"
-    : run.status === "waiting_approval" ? "var(--amber)"
+    : run.status === "running" || run.status === "waiting_approval" ? "var(--amber)"
     : "var(--text-3)";
   const who = [run.agent_label || run.agent_id, run.model].filter(Boolean).join(" · ");
   let status = STUDIO_STATUS_TEXT[run.status] || run.status;
@@ -1024,10 +981,9 @@ function renderStudioRun(s) {
   }
   if (run.studio_url) {
     parts.push(" ", el("a", { href: run.studio_url, target: "_blank", rel: "noopener",
-      style: `color:${color === "var(--text-3)" ? "var(--text-2)" : color}` }, "Mở trong Studio ↗"));
+      style: "color:var(--amber)" }, "Mở trong Studio ↗"));
   }
-  return el("div", { class: "notice", style: `border-color:${color};background:${
-    run.status === "running" && !run.stalled_minutes ? "var(--blue-dim)" : ""}` },
+  return el("div", { class: "notice", style: `border-color:${color}` },
     el("span", { style: "font-size:calc(15px * var(--fs-scale))" },
       run.status === "running" ? "●" : run.status === "failed" ? "⚠" : "◌"),
     el("span", {}, ...parts));

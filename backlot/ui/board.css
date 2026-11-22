@@ -22,8 +22,6 @@
   --red: #e5544b;
   --red-dim: rgba(229, 84, 75, 0.12);
   --blue: #6aa1ff;
-  --blue-dim: rgba(106, 161, 255, 0.14);
-  --blue-ring: rgba(106, 161, 255, 0.45);
   --cream: #f2e9d5;
   --cream-shade: #e5d9be;
   --cream-ink: #29231a;
@@ -66,8 +64,6 @@
   --red: #b84a3b;
   --red-dim: rgba(184, 74, 59, 0.11);
   --blue: #3f6f8f;
-  --blue-dim: rgba(63, 111, 143, 0.12);
-  --blue-ring: rgba(63, 111, 143, 0.4);
   --cream: #fff1c8;
   --cream-shade: #ead39d;
   --cream-ink: #2b251b;
@@ -267,23 +263,14 @@ aside .panel:nth-of-type(1) { animation-delay: .32s } aside .panel:nth-of-type(2
 :root[data-theme="light"] .cost .bar {
   background: #dfc994;
 }
-:root[data-theme="light"] .rail,
-:root[data-theme="light"] .run-progress {
-  border-color: rgba(214,193,142,.9);
-  background: rgba(255,250,235,.82);
-}
 :root[data-theme="light"] .rail {
-  margin: 24px 0 0;
-  padding: 22px 16px 14px;
+  margin: 24px 0 28px;
+  padding: 32px 28px 30px;
   border: 1px solid rgba(214,193,142,.9);
-  border-bottom: 0;
-  border-radius: 16px 16px 0 0;
+  border-radius: 16px;
   background:
     linear-gradient(180deg, rgba(255,250,235,.82), rgba(248,237,211,.7)),
     repeating-linear-gradient(90deg, transparent 0 52px, rgba(159,122,61,.055) 52px 53px);
-}
-:root[data-theme="light"] .run-progress {
-  border-radius: 0 0 16px 16px;
   box-shadow: 0 24px 55px -42px rgba(100,75,37,.7);
 }
 :root[data-theme="light"] .panel,
@@ -319,7 +306,7 @@ aside .panel:nth-of-type(1) { animation-delay: .32s } aside .panel:nth-of-type(2
   box-shadow: 0 12px 24px -18px rgba(64,47,23,.88);
 }
 :root[data-theme="light"] .stage .line {
-  top: 21px;
+  top: 17px;
   left: calc(-50% + 17px);
   right: calc(50% + 17px);
   border-top: 1px dotted rgba(47,123,78,.24);
@@ -456,85 +443,66 @@ aside .panel:nth-of-type(1) { animation-delay: .32s } aside .panel:nth-of-type(2
   box-shadow: 0 14px 28px -18px rgba(58,42,20,.8);
 }
 
-/* ---------- stage rail ----------
-   Studio design (docs/design/mockups/Board.dc.html): rail in a card, dot +
-   label + status word. ✓ done (green), ◆ waiting for you (filled amber +
-   halo), ● running (blue, pulse), … queued, empty dot = not started. */
-.rail {
-  list-style: none; margin: 18px 0 0; display: flex; align-items: flex-start;
-  padding: 16px 8px 12px; background: var(--surface); border: 1px solid var(--border);
-  border-radius: 14px 14px 0 0; border-bottom: 0;
-}
-.stage { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6px; position: relative; min-width: 0; text-align: center; }
-.stage:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+/* ---------- stage rail ---------- */
+.rail { display: flex; align-items: flex-start; padding: 26px 0 22px; }
+.stage { flex: 1; display: flex; flex-direction: column; align-items: center; position: relative; min-width: 0; }
 .stage .node {
-  width: 26px; height: 26px; border-radius: 50%; box-sizing: border-box;
+  width: 26px; height: 26px; border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
-  font-size: calc(12px * var(--fs-scale)); font-weight: 600; z-index: 2; position: relative;
-  background: var(--surface); border: 1.5px solid var(--text-3); color: var(--text-3);
+  font-size: calc(12px * var(--fs-scale)); z-index: 2; position: relative;
+  background: var(--surface-2); border: 1.5px solid var(--border);
+  color: var(--text-3);
 }
 .stage .line {
-  position: absolute; top: 17px; left: calc(-50% + 13px); right: calc(50% + 13px);
+  position: absolute; top: 13px; left: calc(-50% + 13px); right: calc(50% + 13px);
   height: 1.5px; background: var(--border);
 }
 .stage:first-child .line { display: none; }
 .stage .name {
-  font-family: var(--sans, inherit); font-size: calc(13px * var(--fs-scale)); font-weight: 500;
-  color: var(--text-2); overflow-wrap: anywhere;
+  margin-top: 10px; font-family: var(--mono); font-size: calc(11px * var(--fs-scale));
+  letter-spacing: 0.05em; color: var(--text-3);
 }
-.stage .sub { font-size: calc(11px * var(--fs-scale)); letter-spacing: .02em; color: var(--text-3); max-width: 150px; }
+.stage .sub { font-size: calc(10.5px * var(--fs-scale)); color: var(--text-3); margin-top: 3px; text-align: center; max-width: 150px; }
 
-.stage.done .node { background: var(--green-dim); border-color: var(--green); color: var(--green); }
-.stage.done .line { background: color-mix(in srgb, var(--green) 45%, var(--border)); }
-.stage.done .name { color: var(--text); font-weight: 600; }
+.stage.done .node { background: var(--surface-3); border-color: #3a3a42; color: var(--green); }
+.stage.done .line { background: #3a3a42; }
+.stage.done .name { color: var(--text-2); }
 
 .stage.active .node {
-  background: var(--blue-dim); border-color: var(--blue); color: var(--blue);
+  border-color: var(--amber); color: var(--amber); background: var(--amber-dim);
   animation: ringpulse 1.8s ease-in-out infinite;
 }
-.stage.active.inferred .node { border-style: dashed; }
-.stage.active .line { background: linear-gradient(90deg, color-mix(in srgb, var(--green) 45%, var(--border)), var(--blue)); overflow: hidden; }
+.stage.active .line { background: linear-gradient(90deg, #3a3a42, rgba(240,168,60,.55)); overflow: hidden; }
 .stage.active .line::after { /* energy traveling toward the live stage */
   content: ''; position: absolute; top: 0; bottom: 0; width: 34px; left: -40px;
-  background: linear-gradient(90deg, transparent, var(--blue), transparent);
+  background: linear-gradient(90deg, transparent, rgba(240,168,60,.95), transparent);
   animation: travel 1.7s ease-in-out infinite;
 }
 @keyframes travel { to { left: calc(100% + 6px); } }
-.stage.active .name { color: var(--text); font-weight: 600; }
-.stage.active .sub { color: var(--blue); }
+.stage.active .name { color: var(--amber); font-weight: 600; }
+.stage.active .sub { color: var(--text-2); }
 @keyframes ringpulse {
-  0%, 100% { box-shadow: 0 0 0 0 var(--blue-ring); }
-  50% { box-shadow: 0 0 0 8px transparent; }
+  0%, 100% { box-shadow: 0 0 0 0 rgba(240,168,60,.45); }
+  50% { box-shadow: 0 0 0 9px rgba(240,168,60,0); }
 }
 
-.stage.await .node { background: var(--amber); border-color: var(--amber); color: var(--bg); box-shadow: 0 0 0 4px var(--amber-dim); }
-.stage.await .line { background: linear-gradient(90deg, color-mix(in srgb, var(--green) 45%, var(--border)), var(--amber)); }
-.stage.await .name { color: var(--text); font-weight: 600; }
-.stage.await .sub { color: var(--amber); }
+/* inferred current step (no in_progress checkpoint): same motion, dashed ring */
+.stage.active.inferred .node { border-style: dashed; }
 
-.stage.queue .node { border-color: var(--text-2); color: var(--text-2); }
-.stage.queue .name { color: var(--text); font-weight: 600; }
-.stage.queue .sub { color: var(--text-2); }
-
-.stage.failed .node { border-color: var(--red); color: var(--red); background: var(--red-dim); }
-.stage.failed .name { color: var(--red); font-weight: 600; }
-.stage.failed .sub { color: var(--red); }
-
-/* overall run progress — bottom strip of the rail card */
-.rail-wrap { display: flex; flex-direction: column; margin-bottom: 22px; }
-.run-progress {
-  padding: 2px 16px 12px; background: var(--surface); border: 1px solid var(--border);
-  border-top: 0; border-radius: 0 0 14px 14px;
-}
+/* ---------- overall run progress (under the rail) ---------- */
+.rail-wrap { display: flex; flex-direction: column; }
+.run-progress { margin: -6px 0 18px; }
 .run-progress .track {
-  position: relative; height: 4px; border-radius: 999px; overflow: hidden; background: var(--surface-3);
+  position: relative; height: 6px; border-radius: 999px; overflow: hidden;
+  background: var(--surface-2); border: 1px solid var(--border);
 }
 .run-progress .track i {
   position: absolute; inset: 0 auto 0 0; border-radius: inherit;
-  background: var(--text-3); transition: width .8s cubic-bezier(.2,.7,.3,1);
+  background: #3a3a42; transition: width .8s cubic-bezier(.2,.7,.3,1);
 }
 .run-progress.running .track i {
-  background: repeating-linear-gradient(-45deg, var(--blue) 0 8px, var(--blue-ring) 8px 16px);
+  background: repeating-linear-gradient(-45deg,
+    var(--amber) 0 8px, rgba(240,168,60,.55) 8px 16px);
   background-size: 22.6px 22.6px;
   animation: progress-stripes .9s linear infinite;
 }
@@ -542,14 +510,21 @@ aside .panel:nth-of-type(1) { animation-delay: .32s } aside .panel:nth-of-type(2
 @keyframes progress-stripes { to { background-position: 22.6px 0; } }
 .run-progress .label {
   display: flex; justify-content: space-between; gap: 12px; margin-top: 6px;
-  font-size: calc(11px * var(--fs-scale)); color: var(--text-3);
+  font-family: var(--mono); font-size: calc(10.5px * var(--fs-scale)); color: var(--text-3);
 }
-.run-progress.running .label b { color: var(--blue); }
-.run-progress.complete .label b { color: var(--green); }
+.run-progress.running .label b { color: var(--amber); }
 @media (prefers-reduced-motion: reduce) {
   .run-progress.running .track i, .stage.active .node, .stage.active .line::after { animation: none; }
   .run-progress .track i { transition: none; }
 }
+
+.stage.await .node { border-color: var(--amber); color: var(--amber); background: var(--amber-dim); box-shadow: 0 0 18px rgba(240,168,60,.25); }
+.stage.await .line { background: linear-gradient(90deg, #3a3a42, var(--amber)); }
+.stage.await .name { color: var(--amber); font-weight: 600; }
+.stage.await .sub { color: var(--amber); }
+
+.stage.failed .node { border-color: var(--red); color: var(--red); background: var(--red-dim); }
+.stage.failed .name { color: var(--red); }
 
 /* ---------- layout ---------- */
 .board { display: grid; grid-template-columns: 1fr 320px; gap: 22px; align-items: start; }
@@ -1048,7 +1023,7 @@ body:not(.first) .approval-review { animation: none; }
   .rail {
     overflow-x: auto;
     overscroll-behavior-x: contain;
-    padding: 14px 4px 10px;
+    padding: 18px 0 16px;
     scrollbar-width: thin;
   }
   .stage { flex: 0 0 82px; }
@@ -1088,7 +1063,7 @@ body:not(.first) .approval-review { animation: none; }
   .cost { width: 100%; }
   .cost .bar { width: 100%; }
 
-  .rail { padding-left: 6px; padding-right: 6px; }
+  .rail { margin: 0 -12px; padding-left: 12px; padding-right: 12px; }
   .stage { flex-basis: 74px; }
   .stage .name, .stage .sub { max-width: 68px; }
 
