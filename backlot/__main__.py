@@ -1,6 +1,7 @@
 """Backlot CLI.
 
     python -m backlot open [project-id]   # start server if needed, open browser
+                                          # (OPENMONTAGE_BOARD_URL set → print that URL only)
     python -m backlot serve [--port N]    # run the server in the foreground
 
 ``open`` is idempotent and non-fatal by design: agents call it at pipeline
@@ -53,6 +54,13 @@ def _spawn_server(port: int) -> None:
 
 
 def cmd_open(project_id: str | None) -> int:
+    # Hosted mode: a host app (OpenMontage Studio) owns the project board and
+    # passes its URL in OPENMONTAGE_BOARD_URL — print it, start nothing, open
+    # no browser tab (the agent runs headless under the host).
+    hosted = os.environ.get("OPENMONTAGE_BOARD_URL", "").strip()
+    if hosted.startswith(("http://", "https://")):
+        print(f"backlot: {hosted}")
+        return 0
     port = _port()
     if not _server_alive(port):
         try:
