@@ -541,8 +541,22 @@ def _scan_media(project_dir: Path) -> dict[str, list[dict]]:
                 if f.suffix.lower() in MEDIA_IMAGE_EXT and f.is_file():
                     snapshots.append({"path": _rel(project_dir, f)})
 
+    # Character rigs render frame sequences (renders/character_rig_frames);
+    # a few evenly spaced stills are the only picture of the cast, since
+    # character_design itself is a text spec. Bounded: names only, no stat.
+    rig_stills: list[dict] = []
+    for frames_dir in (renders_dir / "character_rig_frames", renders_dir / "character_frames"):
+        if not frames_dir.is_dir():
+            continue
+        frames = sorted(f for f in frames_dir.iterdir()
+                        if f.suffix.lower() in MEDIA_IMAGE_EXT and f.is_file())
+        if frames:
+            picks = sorted({0, len(frames) // 3, (2 * len(frames)) // 3, len(frames) - 1})
+            rig_stills = [{"path": _rel(project_dir, frames[i])} for i in picks]
+            break
+
     renders.sort(key=lambda r: r.get("mtime", 0), reverse=True)
-    return {"renders": renders, "snapshots": snapshots, "music": music}
+    return {"renders": renders, "snapshots": snapshots, "music": music, "rig_stills": rig_stills}
 
 
 def _find_poster(project_dir: Path, state: dict) -> Optional[str]:

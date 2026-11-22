@@ -175,3 +175,17 @@ def test_no_guess_when_everything_completed(project):
                "scene_plan", "assets", "edit", "compose", "publish"):
         _cp(project, st)
     assert _current(load_board_state(project)) == []
+
+
+def test_rig_stills_pick_evenly_spaced_frames(project):
+    frames = project / "renders" / "character_rig_frames"
+    frames.mkdir(parents=True)
+    for i in range(30):
+        (frames / f"frame_{i:04d}.png").write_bytes(b"\x89PNG")
+    stills = load_board_state(project)["media"]["rig_stills"]
+    names = [Path(x["path"]).name for x in stills]
+    assert names == ["frame_0000.png", "frame_0010.png", "frame_0020.png", "frame_0029.png"]
+
+
+def test_no_rig_frames_means_no_stills(project):
+    assert load_board_state(project)["media"]["rig_stills"] == []

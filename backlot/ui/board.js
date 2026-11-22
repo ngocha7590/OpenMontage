@@ -295,6 +295,10 @@ function renderDrawer(s) {
     ));
   }
 
+  if (st.name === "character_design" || st.name === "rig_plan") {
+    const cast = renderCast(s);
+    if (cast) body.append(cast);
+  }
   const names = artifactNamesForStage(st);
   let shown = false;
   for (const name of names) {
@@ -315,8 +319,8 @@ function renderDrawer(s) {
     el("div", { class: "drawer-head" },
       el("h3", {}, `${stageLabel(st.name)} — ${{ completed: "xong", in_progress: "đang chạy", awaiting_human: "chờ bạn duyệt", failed: "lỗi", pending: "chưa chạy" }[st.status] || st.status}`),
       st.gate_skipped ? el("span", { class: "gate-chip" }, "⚑ Bỏ qua gate") : null,
-      st.versions > 1 ? el("span", { class: "ver-chip" }, `v${st.versions}`) : null,
-      st.timestamp ? el("span", { class: "meta", style: "font-family:var(--mono);font-size:calc(10.5px * var(--fs-scale));color:var(--text-3)" }, st.timestamp) : null,
+      st.versions > 1 ? el("span", { class: "ver-chip" }, `${st.versions} phiên bản`) : null,
+      st.timestamp ? el("span", { class: "meta", style: "font-size:12px" }, fmtClock(st.timestamp)) : null,
       el("span", { class: "close", onclick: () => toggleDrawer(st.name) }, "Đóng ✕"),
     ),
     body,
@@ -437,6 +441,10 @@ function genericArtifactSummary(artifact) {
 }
 
 function artifactReviewContent(name, artifact) {
+  if (name === "character_design" && state && Array.isArray(artifact.characters)) {
+    const cast = renderCast(state);
+    return cast ? [cast] : genericArtifactSummary(artifact);
+  }
   if (name === "brief") {
     return [
       artifact.hook ? el("p", { class: "approval-lead" }, artifact.hook) : null,
@@ -1068,6 +1076,44 @@ function renderNoState(s) {
       : "Backlot đang hiện những gì tìm thấy trên đĩa. Run theo checkpoint protocol sẽ có đủ bảng."));
 }
 
+// Character design is a text spec in rig pipelines; the cast is shown as
+// cards (role, silhouette, emotions, actions, palette) plus a few stills
+// of the rendered rig — the only actual picture of the characters.
+function renderCast(s, { compact = false } = {}) {
+  const design = s.artifacts.character_design;
+  const chars = (design && Array.isArray(design.characters)) ? design.characters : [];
+  const stills = (s.media.rig_stills || []);
+  if (!chars.length && !stills.length) return null;
+  const palette = ((design && design.style && design.style.palette) || []).filter((c) => /^#[0-9a-f]{3,8}$/i.test(String(c)));
+  const wrap = el("div", { class: "ds-cast" },
+    el("div", { class: "ds-cast-head" },
+      el("h3", { class: "ds-section-h" }, `Nhân vật${chars.length ? ` · ${chars.length}` : ""}`),
+      palette.length ? el("span", { class: "ds-swatches", title: "Bảng màu" },
+        palette.map((c) => el("i", { style: `background:${c}`, title: c }))) : null,
+      design && design.style && design.style.visual_style ? el("span", { class: "ds-cast-style" }, design.style.visual_style) : null));
+  if (stills.length) {
+    wrap.append(el("div", { class: "ds-cast-stills" }, stills.slice(0, 4).map((f) =>
+      el("figure", {},
+        el("img", { src: thumbURL(s.project_id, f.path, 640), loading: "lazy", alt: "Khung hình rig nhân vật" }),
+        el("figcaption", {}, f.path.split("/").pop())))));
+  } else {
+    wrap.append(el("p", { class: "ds-p", style: "font-size:13px;color:var(--ds-muted)" },
+      "Chưa có hình: nhân vật được dựng thành rig SVG và chỉ có hình khi agent vẽ khung rig (stage Compose)."));
+  }
+  if (chars.length) {
+    wrap.append(el("div", { class: "ds-cast-grid" }, chars.map((c) => el("article", { class: "ds-cast-card" },
+      el("span", { class: "top" }, el("strong", {}, c.display_name || c.id), c.id && c.display_name ? el("span", {}, c.id) : null),
+      c.role ? el("span", { class: "role" }, c.role) : null,
+      !compact && c.silhouette_notes ? el("span", { class: "notes" }, c.silhouette_notes) : null,
+      (c.required_emotions || []).length ? el("span", { class: "chips" }, el("b", {}, "Cảm xúc"),
+        (c.required_emotions || []).slice(0, compact ? 4 : 8).map((e) => el("span", { class: "method" }, humanize(e)))) : null,
+      !compact && (c.required_actions || []).length ? el("span", { class: "chips" }, el("b", {}, "Hành động"),
+        (c.required_actions || []).slice(0, 8).map((e) => el("span", { class: "method" }, humanize(e)))) : null,
+    ))));
+  }
+  return wrap;
+}
+
 function renderBrief(s) {
   const brief = s.artifacts.brief || {};
   const research = s.artifacts.research_brief || {};
@@ -1162,6 +1208,7 @@ function stateAt(s, T) {
   const composeStage = view.stages.find((x) => x.name === "compose");
   if (!(composeStage && composeStage.status === "completed")) {
     view.media.renders = [];
+    view.media.rig_stills = [];
   }
   return view;
 }
@@ -1268,6 +1315,8 @@ function renderTabCard(s) {
     if (noState) body.append(noState);
     const brief = renderBrief(s);
     if (brief) body.append(brief);
+    const cast = renderCast(s, { compact: true });
+    if (cast) body.append(cast);
     if (!body.textContent.trim() && !body.querySelector("video")) {
       body.append(el("div", { class: "ds-empty" }, "Chưa có gì để hiện.",
         el("small", {}, "Xem từng bước ở thanh tiến trình, hoặc mở các tab Script, Storyboard, Video.")));
@@ -1307,6 +1356,7 @@ function normalize(s) {
   s.media.renders = Array.isArray(s.media.renders) ? s.media.renders : [];
   s.media.snapshots = Array.isArray(s.media.snapshots) ? s.media.snapshots : [];
   s.media.music = Array.isArray(s.media.music) ? s.media.music : [];
+  s.media.rig_stills = Array.isArray(s.media.rig_stills) ? s.media.rig_stills : [];
   s.events = Array.isArray(s.events) ? s.events : [];
   if (s.storyboard && Array.isArray(s.storyboard.scenes)) {
     for (const c of s.storyboard.scenes) {
