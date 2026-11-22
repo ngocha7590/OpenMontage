@@ -63,7 +63,7 @@ function renderLivePill(s) {
       el("span", { class: "dot", style: "background:var(--red);animation:none" }),
       `⚠ QUIET ${run.stalled_minutes}M`);
   } else if (run && run.status === "running") {
-    liveEl = el("span", { class: "live" }, el("span", { class: "dot" }), "RUNNING");
+    liveEl = el("span", { class: "live" }, el("span", { class: "dot" }), "LIVE");
   } else if (run && run.status === "queued") {
     liveEl = el("span", { class: "live idle" }, el("span", { class: "dot" }),
       `QUEUED${run.queue_position ? " #" + run.queue_position : ""}`);
@@ -146,10 +146,7 @@ function stageSub(st) {
     return "in progress";
   }
   if (st.status === "in_progress") return "in progress";
-  if (st.current) {
-    if (st.current_tool) return `đang chạy\n${st.current_tool}`;
-    return "đang chạy\n(ước đoán)";
-  }
+  if (st.current) return st.current_tool ? `in progress\n${st.current_tool}` : "in progress";
   if (st.status === "failed") return st.error ? String(st.error).slice(0, 60) : "failed";
   if (st.timestamp) {
     const approved = st.gated && st.human_approved ? " · approved" : "";
@@ -166,9 +163,11 @@ function renderRail(s) {
       : st.status === "in_progress" ? (st.stalled ? "active stalled" : "active")
       : st.status === "awaiting_human" ? "await"
       : st.status === "failed" ? "failed"
-      : st.current ? "active inferred" : "";
-    const icon = STAGE_ICONS[st.status] || String(pendingIndex);
-    if (!STAGE_ICONS[st.status]) pendingIndex += 1;
+      : st.current ? "active" : "";
+    // a stage inferred as current (no in_progress checkpoint yet) looks
+    // exactly like an in_progress one — same ◉ node, ring pulse, glow line
+    const icon = STAGE_ICONS[st.current ? "in_progress" : st.status] || String(pendingIndex);
+    if (!STAGE_ICONS[st.status] && !st.current) pendingIndex += 1;
     const node = el("div", {
       class: `stage ${cls}${selectedStage === st.name ? " selected" : ""}${st.undeclared ? " undeclared" : ""}`,
       title: st.undeclared ? `"${st.name}" ran but isn't declared by this pipeline's manifest` : null,
@@ -182,34 +181,7 @@ function renderRail(s) {
     );
     rail.append(node);
   }
-  return el("div", { class: "rail-wrap" }, rail, renderProgress(s));
-}
-
-// Overall progress under the rail: completed / declared stages, half a step
-// for the one being worked on; striped + moving while a run is active.
-function renderProgress(s) {
-  const stages = s.stages.filter((x) => !x.undeclared);
-  if (!stages.length) return null;
-  const done = stages.filter((x) => x.status === "completed").length;
-  const current = stages.find((x) =>
-    x.status === "in_progress" || x.status === "awaiting_human" || x.current);
-  const run = s.studio_run;
-  const running = (run && run.status === "running") || Boolean(current && current.status !== "awaiting_human");
-  const pct = Math.min(100, Math.round(((done + (current ? 0.5 : 0)) / stages.length) * 100));
-  let label = `${done}/${stages.length} bước xong`;
-  if (current) {
-    const verb = current.status === "awaiting_human" ? "chờ duyệt" : "đang chạy";
-    const guess = current.current && current.current_source === "next" ? " (ước đoán)" : "";
-    const tool = current.current_tool ? ` · ${current.current_tool}` : "";
-    label += ` · ${verb}: ${current.name}${tool}${guess}`;
-  } else if (done === stages.length) {
-    label += " · hoàn tất";
-  }
-  return el("div", { class: `run-progress${running ? " running" : ""}${done === stages.length ? " complete" : ""}` },
-    el("div", { class: "track", role: "progressbar", "aria-valuemin": "0", "aria-valuemax": "100",
-      "aria-valuenow": String(pct), "aria-label": label },
-      el("i", { style: `width:${pct}%` })),
-    el("div", { class: "label" }, el("span", {}, label), el("b", {}, `${pct}%`)));
+  return rail;
 }
 
 function toggleDrawer(stageName) {
