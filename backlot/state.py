@@ -629,6 +629,57 @@ def read_studio_run(project_dir: Path) -> Optional[dict[str, Any]]:
     return out
 
 
+def _stage_of_output(stages: list[dict], output_path: Any) -> Optional[str]:
+    """Map a tool event's ``output_path`` to the stage that produces it.
+
+    ``artifacts/<name>.json`` → stage whose ``produces`` lists ``<name>``;
+    ``assets/**`` → ``assets``; ``renders/**`` → ``compose`` (when declared).
+    """
+    if not isinstance(output_path, str) or not output_path:
+        return None
+    parts = output_path.replace("\\", "/").split("/")
+    names = {s["name"] for s in stages}
+    if "artifacts" in parts:
+        stem = Path(parts[-1]).stem
+        for st in stages:
+            if stem in (st.get("produces") or []):
+                return st["name"]
+    if "renders" in parts and "compose" in names:
+        return "compose"
+    if "assets" in parts and "assets" in names:
+        return "assets"
+    return None
+
+
+def _infer_current_stage(stages: list[dict], events: list[dict]) -> Optional[dict]:
+    """Best guess of the stage a running agent is working on when no
+    checkpoint says ``in_progress`` (many agents only write ``completed``).
+
+    1. the most recent tool call that started but has not finished, mapped
+       through its ``output_path``;
+    2. otherwise the first not-completed stage after the last completed one.
+    Returns ``{"name", "source": "event"|"next"}`` or None (all done).
+    """
+    finished = {e.get("call_id") for e in events if e.get("event") == "finish"}
+    for ev in reversed(events):
+        if ev.get("event") != "start" or ev.get("call_id") in finished:
+            continue
+        name = _stage_of_output(stages, ev.get("output_path"))
+        if name:
+            st = next(s for s in stages if s["name"] == name)
+            if st["status"] != "completed":
+                return {"name": name, "source": "event", "tool": ev.get("tool")}
+        break  # only the newest open call is a reliable signal
+    declared = [s for s in stages if not s.get("undeclared")]
+    last_done = max(
+        (i for i, s in enumerate(declared) if s["status"] == "completed"), default=-1
+    )
+    for st in declared[last_done + 1:]:
+        if st["status"] != "completed":
+            return {"name": st["name"], "source": "next"}
+    return None
+
+
 def _last_activity(project_dir: Path) -> float:
     """Most recent mtime among state-bearing files (bounded scan)."""
     latest = 0.0
@@ -731,6 +782,20 @@ def load_board_state(project_dir: Path) -> dict[str, Any]:
     status = (studio_run or {}).get("status")
     live_ref = disk_activity if status == "queued" else last_activity
     live = status == "running" or bool(live_ref and (now - live_ref) < LIVE_WINDOW_SECONDS)
+
+    # Current step for the rail: a checkpoint saying in_progress/awaiting
+    # wins; otherwise, while a run is active, infer it (flagged ``current``
+    # with ``current_source`` so the UI can say it is a guess).
+    if status == "running" or (live and not studio_run):
+        if not any(s["status"] in ("in_progress", "awaiting_human") for s in stages):
+            guess = _infer_current_stage(stages, events)
+            if guess:
+                for st in stages:
+                    if st["name"] == guess["name"]:
+                        st["current"] = True
+                        st["current_source"] = guess["source"]
+                        if guess.get("tool"):
+                            st["current_tool"] = guess["tool"]
 
     state: dict[str, Any] = {
         "project_id": project_id,

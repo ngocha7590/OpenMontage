@@ -106,3 +106,72 @@ def test_queued_run_is_not_live(project):
     s = load_board_state(project)
     assert s["live"] is False
     assert summarize_project(project)["studio_status"] == "queued"
+
+
+def _cp(p: Path, stage: str, status: str = "completed") -> None:
+    (p / f"checkpoint_{stage}.json").write_text(json.dumps({
+        "version": "1.0", "project_id": p.name, "stage": stage, "status": status,
+        "pipeline_type": "character-animation",
+        "timestamp": datetime.now(timezone.utc).isoformat(), "artifacts": {},
+    }), encoding="utf-8")
+
+
+def _events(p: Path, rows: list) -> None:
+    (p / "events.jsonl").write_text(
+        "\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+
+
+def _current(s):
+    return [(x["name"], x.get("current_source"), x.get("current_tool"))
+            for x in s["stages"] if x.get("current")]
+
+
+def test_current_step_is_next_stage_after_last_completed(project):
+    _run(project)
+    _cp(project, "research")
+    _cp(project, "proposal")
+    assert _current(load_board_state(project)) == [("script", "next", None)]
+
+
+def test_current_step_from_open_tool_call(project):
+    _run(project)
+    for st in ("research", "proposal", "script", "character_design"):
+        _cp(project, st)
+    out = str(project / "artifacts" / "rig_plan.json")
+    _events(project, [
+        {"call_id": "a", "tool": "svg_rig_builder", "event": "start", "output_path": out},
+    ])
+    assert _current(load_board_state(project)) == [("rig_plan", "event", "svg_rig_builder")]
+    # finished call → falls back to the next-stage guess (still rig_plan)
+    _events(project, [
+        {"call_id": "a", "tool": "svg_rig_builder", "event": "start", "output_path": out},
+        {"call_id": "a", "tool": "svg_rig_builder", "event": "finish", "output_path": out},
+    ])
+    assert _current(load_board_state(project)) == [("rig_plan", "next", None)]
+
+
+def test_asset_and_render_outputs_map_to_stages(project):
+    _run(project)
+    _events(project, [{"call_id": "b", "tool": "local_tts", "event": "start",
+                       "output_path": str(project / "assets" / "audio" / "n1.wav")}])
+    assert _current(load_board_state(project))[0][:2] == ("assets", "event")
+    _events(project, [{"call_id": "c", "tool": "video_compose", "event": "start",
+                       "output_path": str(project / "renders" / "final.mp4")}])
+    assert _current(load_board_state(project))[0][:2] == ("compose", "event")
+
+
+def test_no_guess_when_checkpoint_in_progress_or_run_not_running(project):
+    _run(project)
+    _cp(project, "research", "in_progress")
+    assert _current(load_board_state(project)) == []
+    _cp(project, "research")
+    _run(project, status="failed")
+    assert _current(load_board_state(project)) == []
+
+
+def test_no_guess_when_everything_completed(project):
+    _run(project)
+    for st in ("research", "proposal", "script", "character_design", "rig_plan",
+               "scene_plan", "assets", "edit", "compose", "publish"):
+        _cp(project, st)
+    assert _current(load_board_state(project)) == []

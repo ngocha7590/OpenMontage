@@ -486,6 +486,38 @@ aside .panel:nth-of-type(1) { animation-delay: .32s } aside .panel:nth-of-type(2
   50% { box-shadow: 0 0 0 9px rgba(240,168,60,0); }
 }
 
+/* inferred current step (no in_progress checkpoint): same motion, dashed ring */
+.stage.active.inferred .node { border-style: dashed; }
+
+/* ---------- overall run progress (under the rail) ---------- */
+.rail-wrap { display: flex; flex-direction: column; }
+.run-progress { margin: -6px 0 18px; }
+.run-progress .track {
+  position: relative; height: 6px; border-radius: 999px; overflow: hidden;
+  background: var(--surface-2); border: 1px solid var(--border);
+}
+.run-progress .track i {
+  position: absolute; inset: 0 auto 0 0; border-radius: inherit;
+  background: #3a3a42; transition: width .8s cubic-bezier(.2,.7,.3,1);
+}
+.run-progress.running .track i {
+  background: repeating-linear-gradient(-45deg,
+    var(--amber) 0 8px, rgba(240,168,60,.55) 8px 16px);
+  background-size: 22.6px 22.6px;
+  animation: progress-stripes .9s linear infinite;
+}
+.run-progress.complete .track i { background: var(--green); }
+@keyframes progress-stripes { to { background-position: 22.6px 0; } }
+.run-progress .label {
+  display: flex; justify-content: space-between; gap: 12px; margin-top: 6px;
+  font-family: var(--mono); font-size: calc(10.5px * var(--fs-scale)); color: var(--text-3);
+}
+.run-progress.running .label b { color: var(--amber); }
+@media (prefers-reduced-motion: reduce) {
+  .run-progress.running .track i, .stage.active .node, .stage.active .line::after { animation: none; }
+  .run-progress .track i { transition: none; }
+}
+
 .stage.await .node { border-color: var(--amber); color: var(--amber); background: var(--amber-dim); box-shadow: 0 0 18px rgba(240,168,60,.25); }
 .stage.await .line { background: linear-gradient(90deg, #3a3a42, var(--amber)); }
 .stage.await .name { color: var(--amber); font-weight: 600; }

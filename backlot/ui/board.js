@@ -146,6 +146,10 @@ function stageSub(st) {
     return "in progress";
   }
   if (st.status === "in_progress") return "in progress";
+  if (st.current) {
+    if (st.current_tool) return `đang chạy\n${st.current_tool}`;
+    return "đang chạy\n(ước đoán)";
+  }
   if (st.status === "failed") return st.error ? String(st.error).slice(0, 60) : "failed";
   if (st.timestamp) {
     const approved = st.gated && st.human_approved ? " · approved" : "";
@@ -161,7 +165,8 @@ function renderRail(s) {
     const cls = st.status === "completed" ? "done"
       : st.status === "in_progress" ? (st.stalled ? "active stalled" : "active")
       : st.status === "awaiting_human" ? "await"
-      : st.status === "failed" ? "failed" : "";
+      : st.status === "failed" ? "failed"
+      : st.current ? "active inferred" : "";
     const icon = STAGE_ICONS[st.status] || String(pendingIndex);
     if (!STAGE_ICONS[st.status]) pendingIndex += 1;
     const node = el("div", {
@@ -177,7 +182,34 @@ function renderRail(s) {
     );
     rail.append(node);
   }
-  return rail;
+  return el("div", { class: "rail-wrap" }, rail, renderProgress(s));
+}
+
+// Overall progress under the rail: completed / declared stages, half a step
+// for the one being worked on; striped + moving while a run is active.
+function renderProgress(s) {
+  const stages = s.stages.filter((x) => !x.undeclared);
+  if (!stages.length) return null;
+  const done = stages.filter((x) => x.status === "completed").length;
+  const current = stages.find((x) =>
+    x.status === "in_progress" || x.status === "awaiting_human" || x.current);
+  const run = s.studio_run;
+  const running = (run && run.status === "running") || Boolean(current && current.status !== "awaiting_human");
+  const pct = Math.min(100, Math.round(((done + (current ? 0.5 : 0)) / stages.length) * 100));
+  let label = `${done}/${stages.length} bước xong`;
+  if (current) {
+    const verb = current.status === "awaiting_human" ? "chờ duyệt" : "đang chạy";
+    const guess = current.current && current.current_source === "next" ? " (ước đoán)" : "";
+    const tool = current.current_tool ? ` · ${current.current_tool}` : "";
+    label += ` · ${verb}: ${current.name}${tool}${guess}`;
+  } else if (done === stages.length) {
+    label += " · hoàn tất";
+  }
+  return el("div", { class: `run-progress${running ? " running" : ""}${done === stages.length ? " complete" : ""}` },
+    el("div", { class: "track", role: "progressbar", "aria-valuemin": "0", "aria-valuemax": "100",
+      "aria-valuenow": String(pct), "aria-label": label },
+      el("i", { style: `width:${pct}%` })),
+    el("div", { class: "label" }, el("span", {}, label), el("b", {}, `${pct}%`)));
 }
 
 function toggleDrawer(stageName) {
