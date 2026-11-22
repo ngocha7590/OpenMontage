@@ -36,7 +36,8 @@ The scene schema rejects per-scene extra fields, so product controls live at the
 ```
 
 - `reference_view` (optional) tells `storyboard_frames` which view of a composite reference to use.
-- `use_provided` (optional, packshot only) = a clean supplied photo to use as-is. Do **not** set it when the photo has other objects, several angles or a watermark.
+- `use_provided` (optional, packshot only) = a clean supplied photo to use as-is. Do **not** set it when the photo has other objects, several angles or a watermark. In that case, set `reference_view` to the view to use for the packshot; the storyboard director then builds the frame from a crop of the real photo (`storyboard-director.md` → "Packshot frame").
+- The packshot's `start_state` names the side reserved for copy, e.g. "case on the right third, left side empty for name and CTA".
 - `control` must be one of `image_to_video`, `first_last_frame`, `packshot_still`.
 
 ## Output

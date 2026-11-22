@@ -24,6 +24,25 @@ storyboard_frames(
 - References default to `metadata.commercial_product.identity_references`, else every image in `inputs/` (max 4 are sent).
 - The tool writes `assets/storyboard/<scene>_start.png` (and `_end.png`), keeps existing frames unless `overwrite`, and lists `failed[]` per scene — report failures, do not hide them.
 
+## Packshot frame (`packshot_still`)
+
+The packshot is held on screen for seconds at full delivery size, so it must be the sharpest frame in the ad. Build it from a real product photo; use a generated frame only when no usable photo exists.
+
+1. **Source.** Use a real photo at native resolution. A generated frame below the delivery height (e.g. muse returns ~500 px wide) is never a packshot: upscaling it 2× or more makes it soft. If the only photo is a composite, crop one product from it.
+2. **Crop.** Keep the whole product with a margin of about 10 % of its size on every side: all parts (both knobs, the stand/handle, the cable if it explains a feature) stay inside the crop. Do not cut through the product or its shadow. Exclude other products, devices and accessories from the composite.
+3. **Canvas without seams.** Never paste a hard-edged crop onto a flat colour fill: the step at the crop edge shows as a line across the frame. Instead:
+   - fill the canvas with the photo's own background: stretch or mirror the crop's edge strips outward, blur them heavily (radius ≥ 5 % of the canvas width), or use a gradient sampled from the crop's border pixels;
+   - feather the crop into that fill with a soft mask (≥ 60 px at 1080p, or ~6 % of the crop width), so there is no hard edge;
+   - match brightness and colour across the join.
+4. **Layout.** Use the delivery aspect and size. The product fills about 45–60 % of the frame height and sits on one third. Keep the other side empty and calm for the product name and CTA, inside a 5 % title-safe margin. Upscale the crop by at most 1.5×; if the crop needs more, use a smaller product scale.
+5. **Record.** Write the result to `assets/storyboard/<scene>_start.png` with `source: provided`. In `notes`, say which part of which photo was used and how the canvas was extended.
+
+Check it at 100 % zoom before presenting:
+- no visible vertical or horizontal edge, and no colour step;
+- no product part cut off;
+- the edges of the product are sharp, not upscaled mush;
+- the copy area holds no detail that would fight the text.
+
 ## Review before presenting
 
 Open every frame next to the product photos and check, per scene:
