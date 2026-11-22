@@ -263,16 +263,6 @@ aside .panel:nth-of-type(1) { animation-delay: .32s } aside .panel:nth-of-type(2
 :root[data-theme="light"] .cost .bar {
   background: #dfc994;
 }
-:root[data-theme="light"] .rail {
-  margin: 24px 0 28px;
-  padding: 32px 28px 30px;
-  border: 1px solid rgba(214,193,142,.9);
-  border-radius: 16px;
-  background:
-    linear-gradient(180deg, rgba(255,250,235,.82), rgba(248,237,211,.7)),
-    repeating-linear-gradient(90deg, transparent 0 52px, rgba(159,122,61,.055) 52px 53px);
-  box-shadow: 0 24px 55px -42px rgba(100,75,37,.7);
-}
 :root[data-theme="light"] .panel,
 :root[data-theme="light"] .drawer,
 :root[data-theme="light"] .replay-bar,
@@ -297,45 +287,6 @@ aside .panel:nth-of-type(1) { animation-delay: .32s } aside .panel:nth-of-type(2
 :root[data-theme="light"] .panel-head h2,
 :root[data-theme="light"] .section-title {
   color: #7c6340;
-}
-:root[data-theme="light"] .stage .node {
-  width: 34px;
-  height: 34px;
-  border-width: 2px;
-  background: linear-gradient(180deg, #fff8e7, #ead8b5);
-  box-shadow: 0 12px 24px -18px rgba(64,47,23,.88);
-}
-:root[data-theme="light"] .stage .line {
-  top: 17px;
-  left: calc(-50% + 17px);
-  right: calc(50% + 17px);
-  border-top: 1px dotted rgba(47,123,78,.24);
-  background: transparent;
-}
-:root[data-theme="light"] .stage:hover { background: rgba(184,82,45,.045); }
-:root[data-theme="light"] .stage.done .node {
-  background: linear-gradient(180deg, #f7fff5, #dcefdc);
-  border-color: #3f8f5a;
-  color: var(--green);
-}
-:root[data-theme="light"] .stage.done .line {
-  border-color: rgba(47,123,78,.22);
-  background: transparent;
-}
-:root[data-theme="light"] .stage.active .line,
-:root[data-theme="light"] .stage.await .line {
-  border-color: rgba(184,82,45,.36);
-  background: transparent;
-}
-:root[data-theme="light"] .stage .name {
-  color: #6a5537;
-  font-weight: 700;
-}
-:root[data-theme="light"] .stage .sub {
-  color: #9d875f;
-}
-:root[data-theme="light"] .stage.done .sub {
-  color: #8a7858;
 }
 :root[data-theme="light"] .script-card {
   background:
@@ -443,56 +394,56 @@ aside .panel:nth-of-type(1) { animation-delay: .32s } aside .panel:nth-of-type(2
   box-shadow: 0 14px 28px -18px rgba(58,42,20,.8);
 }
 
-/* ---------- stage rail ---------- */
-.rail { display: flex; align-items: flex-start; padding: 26px 0 22px; }
-.stage { flex: 1; display: flex; flex-direction: column; align-items: center; position: relative; min-width: 0; }
+/* ---------- stage rail ----------
+   docs/design/mockups/Board.dc.html — "Tiến trình pipeline". Values copied
+   from the mockup (card #171A21 / #262B36, line #343A48, Inter 13/11px). */
+.rail {
+  list-style: none; margin: 18px 0 22px; padding: 14px 8px 10px;
+  display: flex; position: relative;
+  background: #171A21; border: 1px solid #262B36; border-radius: 14px;
+  font-family: var(--sans);
+}
+.rail-line { position: absolute; left: 6%; right: 6%; top: 27px; height: 1px; background: #343A48; }
+.stage {
+  flex: 1 1 0; min-width: 0; position: relative;
+  display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center;
+}
+.stage:focus-visible { outline: 2px solid #6EA8FF; outline-offset: 2px; border-radius: 8px; }
 .stage .node {
-  width: 26px; height: 26px; border-radius: 50%;
+  width: 26px; height: 26px; border-radius: 50%; box-sizing: border-box; z-index: 1;
   display: flex; align-items: center; justify-content: center;
-  font-size: calc(12px * var(--fs-scale)); z-index: 2; position: relative;
-  background: var(--surface-2); border: 1.5px solid var(--border);
-  color: var(--text-3);
+  font-size: 12px; font-weight: 600;
+  background: #171A21; color: #1A1206; border: 1.5px solid #434A5A;
 }
-.stage .line {
-  position: absolute; top: 13px; left: calc(-50% + 13px); right: calc(50% + 13px);
-  height: 1.5px; background: var(--border);
-}
-.stage:first-child .line { display: none; }
-.stage .name {
-  margin-top: 10px; font-family: var(--mono); font-size: calc(11px * var(--fs-scale));
-  letter-spacing: 0.05em; color: var(--text-3);
-}
-.stage .sub { font-size: calc(10.5px * var(--fs-scale)); color: var(--text-3); margin-top: 3px; text-align: center; max-width: 150px; }
+.stage .name { font-size: 13px; font-weight: 500; color: #8A93A3; overflow-wrap: anywhere; }
+.stage .sub { font-size: 11px; letter-spacing: 0.02em; color: #6E7787; }
 
-.stage.done .node { background: var(--surface-3); border-color: #3a3a42; color: var(--green); }
-.stage.done .line { background: #3a3a42; }
-.stage.done .name { color: var(--text-2); }
+.stage.k-done .node { background: #1E3A2C; color: #4CC38A; border-color: #4CC38A; }
+.stage.k-wait .node { background: #F5B544; color: #1A1206; border-color: #F5B544; box-shadow: 0 0 0 4px rgba(245,181,68,0.18); }
+.stage.k-run .node { background: #16243A; color: #6EA8FF; border-color: #6EA8FF; animation: rail-pulse 1.6s ease-out infinite; }
+.stage.k-queue .node { color: #B3BAC6; border-color: #B3BAC6; }
+.stage.k-fail .node, .stage.k-stall .node { background: rgba(255,107,107,0.14); color: #FF6B6B; border-color: #FF6B6B; }
 
-.stage.active .node {
-  border-color: var(--amber); color: var(--amber); background: var(--amber-dim);
-  animation: ringpulse 1.8s ease-in-out infinite;
-}
-.stage.active .line { background: linear-gradient(90deg, #3a3a42, rgba(240,168,60,.55)); overflow: hidden; }
-.stage.active .line::after { /* energy traveling toward the live stage */
-  content: ''; position: absolute; top: 0; bottom: 0; width: 34px; left: -40px;
-  background: linear-gradient(90deg, transparent, rgba(240,168,60,.95), transparent);
-  animation: travel 1.7s ease-in-out infinite;
-}
-@keyframes travel { to { left: calc(100% + 6px); } }
-.stage.active .name { color: var(--amber); font-weight: 600; }
-.stage.active .sub { color: var(--text-2); }
-@keyframes ringpulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(240,168,60,.45); }
-  50% { box-shadow: 0 0 0 9px rgba(240,168,60,0); }
-}
+.stage:not(.k-todo) .name { font-weight: 600; color: #E7E9EE; }
+.stage.k-wait .sub { color: #F5B544; }
+.stage.k-run .sub { color: #6EA8FF; }
+.stage.k-queue .sub { color: #B3BAC6; }
+.stage.k-fail .sub, .stage.k-stall .sub { color: #FF6B6B; }
 
-.stage.await .node { border-color: var(--amber); color: var(--amber); background: var(--amber-dim); box-shadow: 0 0 18px rgba(240,168,60,.25); }
-.stage.await .line { background: linear-gradient(90deg, #3a3a42, var(--amber)); }
-.stage.await .name { color: var(--amber); font-weight: 600; }
-.stage.await .sub { color: var(--amber); }
-
-.stage.failed .node { border-color: var(--red); color: var(--red); background: var(--red-dim); }
-.stage.failed .name { color: var(--red); }
+@keyframes rail-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(110,168,255,0.45); }
+  70% { box-shadow: 0 0 0 8px rgba(110,168,255,0); }
+  100% { box-shadow: 0 0 0 0 rgba(110,168,255,0); }
+}
+@media (prefers-reduced-motion: reduce) { .stage.k-run .node { animation: none; } }
+:root[data-theme="light"] .rail { background: var(--surface); border-color: var(--border); }
+:root[data-theme="light"] .rail-line { background: var(--border); }
+:root[data-theme="light"] .stage.k-todo .node { background: var(--surface); border-color: var(--text-3); }
+:root[data-theme="light"] .stage.k-done .node { background: var(--green-dim); color: var(--green); border-color: var(--green); }
+:root[data-theme="light"] .stage.k-run .node { background: rgba(110,168,255,0.14); }
+:root[data-theme="light"] .stage .name { color: var(--text-2); }
+:root[data-theme="light"] .stage:not(.k-todo) .name { color: var(--text); }
+:root[data-theme="light"] .stage .sub { color: var(--text-3); }
 
 /* ---------- layout ---------- */
 .board { display: grid; grid-template-columns: 1fr 320px; gap: 22px; align-items: start; }
@@ -885,7 +836,7 @@ a.backlink:hover { color: var(--text-2); }
    ============================================================ */
 
 /* stage nodes are interactive on the real board */
-.stage { cursor: pointer; border-radius: 8px; padding: 4px 2px; transition: background .15s; }
+.stage { cursor: pointer; border-radius: 8px; transition: background .15s; }
 .stage:hover { background: rgba(255,255,255,.025); }
 .stage.selected .name { text-decoration: underline; text-underline-offset: 4px; }
 
@@ -974,9 +925,6 @@ body:not(.first) .approval-review { animation: none; }
 .cost .bar i.crit { background: var(--red); }
 
 /* in_progress stage with no filesystem activity for a while (F-05) */
-.stage.stalled .node { border-color: var(--red); color: var(--red); background: var(--red-dim); animation: none; }
-.stage.stalled .name { color: var(--red); }
-.stage.stalled .sub { color: var(--red); }
 
 /* responsive project board */
 @media (max-width: 900px) {

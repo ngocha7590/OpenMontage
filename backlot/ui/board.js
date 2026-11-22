@@ -1,7 +1,7 @@
 // Backlot project board — renders BoardState and stays live via SSE.
 
 import {
-  STAGE_ICONS, el, fmtAgo, fmtClock, fmtDuration, fmtMoney,
+  el, fmtAgo, fmtClock, fmtDuration, fmtMoney,
   getJSON, mediaURL, subscribe, thumbURL, waveBars,
 } from "/ui/lib.js";
 
@@ -135,51 +135,85 @@ function renderSlate(s) {
 // stage rail
 // ---------------------------------------------------------------------------
 
-function stageSub(st) {
-  if (st.status === "awaiting_human") return "awaiting your approval\nreply in chat to continue";
-  if (st.status === "in_progress" && st.stalled) {
-    return `stalled? no activity for ${st.stalled_minutes}m\nask the agent for status`;
+// Stage rail — docs/design/mockups/Board.dc.html ("Tiến trình pipeline"):
+// card, one thin line, dot + label + status word. ✓ Xong/Đã duyệt, ● Đang
+// chạy (blue pulse), ◆ Chờ bạn duyệt, … Xếp hàng, empty dot Cần duyệt/—.
+function stageLabel(name) {
+  const t = String(name || "").replace(/[_-]+/g, " ").trim();
+  return t ? t.charAt(0).toUpperCase() + t.slice(1) : "";
+}
+
+// Kind per stage from checkpoints; Studio run state fills the gaps a
+// checkpoint-less agent leaves (queued run → next stage "Xếp hàng", Studio
+// gate → its stage "Chờ bạn duyệt"; current step inferred server-side).
+function railKinds(s) {
+  const declared = s.stages.filter((x) => !x.undeclared);
+  const run = s.studio_run;
+  const kinds = new Map();
+  for (const st of s.stages) {
+    kinds.set(st.name,
+      st.status === "completed" ? "done"
+        : st.status === "awaiting_human" ? "wait"
+        : st.status === "failed" ? "fail"
+        : st.status === "in_progress" ? (st.stalled ? "stall" : "run")
+        : st.current ? "run"
+        : "todo");
   }
-  if (st.status === "in_progress" && st.partial_progress) {
-    const done = st.partial_progress.completed_scene_ids;
-    if (Array.isArray(done)) return `${done.length} scene${done.length === 1 ? "" : "s"} done`;
-    return "in progress";
+  const busy = [...kinds.values()].some((k) => k === "wait" || k === "run" || k === "stall");
+  if (run && !busy) {
+    if (run.status === "waiting_approval" && kinds.get(run.pending_gate) === "todo") {
+      kinds.set(run.pending_gate, "wait");
+    } else if (run.status === "queued") {
+      const lastDone = declared.reduce((acc, x, i) => (kinds.get(x.name) === "done" ? i : acc), -1);
+      const next = declared.slice(lastDone + 1).find((x) => kinds.get(x.name) === "todo");
+      if (next) kinds.set(next.name, "queue");
+    }
   }
-  if (st.status === "in_progress") return "in progress";
-  if (st.current) return st.current_tool ? `in progress\n${st.current_tool}` : "in progress";
-  if (st.status === "failed") return st.error ? String(st.error).slice(0, 60) : "failed";
-  if (st.timestamp) {
-    const approved = st.gated && st.human_approved ? " · approved" : "";
-    return fmtClock(st.timestamp) + approved;
+  return kinds;
+}
+
+const RAIL_MARK = { done: "✓", wait: "◆", run: "●", queue: "…", fail: "✕", stall: "!", todo: "" };
+
+function railSub(st, kind) {
+  switch (kind) {
+    case "done": return st.gated && st.human_approved ? "Đã duyệt" : "Xong";
+    case "wait": return "Chờ bạn duyệt";
+    case "run": return "Đang chạy";
+    case "queue": return "Xếp hàng";
+    case "fail": return "Lỗi";
+    case "stall": return `Im lặng ${st.stalled_minutes || "?"} phút`;
+    default: return st.gated ? "Cần duyệt" : "—";
   }
-  return "";
+}
+
+function railTitle(st) {
+  const bits = [st.name];
+  if (st.timestamp) bits.push(fmtClock(st.timestamp));
+  if (st.versions > 1) bits.push(`${st.versions} phiên bản`);
+  if (st.current_tool) bits.push(st.current_tool);
+  if (st.error) bits.push(String(st.error).slice(0, 160));
+  return bits.join(" · ");
 }
 
 function renderRail(s) {
-  const rail = el("nav", { class: "rail" });
-  let pendingIndex = 1;
+  const rail = el("ol", { class: "rail", "aria-label": "Tiến trình pipeline" },
+    el("div", { class: "rail-line", "aria-hidden": "true" }));
+  const kinds = railKinds(s);
   for (const st of s.stages) {
-    const cls = st.status === "completed" ? "done"
-      : st.status === "in_progress" ? (st.stalled ? "active stalled" : "active")
-      : st.status === "awaiting_human" ? "await"
-      : st.status === "failed" ? "failed"
-      : st.current ? "active" : "";
-    // a stage inferred as current (no in_progress checkpoint yet) looks
-    // exactly like an in_progress one — same ◉ node, ring pulse, glow line
-    const icon = STAGE_ICONS[st.current ? "in_progress" : st.status] || String(pendingIndex);
-    if (!STAGE_ICONS[st.status] && !st.current) pendingIndex += 1;
-    const node = el("div", {
-      class: `stage ${cls}${selectedStage === st.name ? " selected" : ""}${st.undeclared ? " undeclared" : ""}`,
-      title: st.undeclared ? `"${st.name}" ran but isn't declared by this pipeline's manifest` : null,
+    const kind = kinds.get(st.name) || "todo";
+    const current = kind === "wait" || kind === "run" || kind === "queue" || kind === "stall";
+    rail.append(el("li", {
+      class: `stage k-${kind}${selectedStage === st.name ? " selected" : ""}${st.undeclared ? " undeclared" : ""}`,
+      title: railTitle(st),
+      "aria-current": current ? "step" : null,
+      tabindex: "0",
       onclick: () => toggleDrawer(st.name),
+      onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleDrawer(st.name); } },
     },
-      el("span", { class: "line" }),
-      el("span", { class: "node" }, icon),
-      el("span", { class: "name" }, st.name),
-      el("span", { class: "sub", style: "white-space:pre-line" },
-        st.undeclared ? `${stageSub(st)}\nunlisted`.trim() : stageSub(st)),
-    );
-    rail.append(node);
+      el("span", { class: "node", "aria-hidden": "true" }, RAIL_MARK[kind]),
+      el("span", { class: "name" }, stageLabel(st.name)),
+      el("span", { class: "sub" }, railSub(st, kind)),
+    ));
   }
   return rail;
 }
