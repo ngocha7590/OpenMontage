@@ -12,122 +12,134 @@ const app = document.getElementById("app");
 const modal = document.getElementById("modal");
 const player = document.getElementById("player");
 
-const THEME_KEY = "backlot.theme";
-let currentTheme = localStorage.getItem(THEME_KEY) === "light" ? "light" : "dark";
 let state = null;
 let selectedStage = null;   // stage drawer open for this stage name
 let activeRender = 0;
 let replay = null;          // {t0, t1, t, playing} — replay mode when non-null
 let firstPaint = true;
+let activeTab = "overview"; // ds tabs: overview | script | storyboard | media | video
+let mediaKind = null;       // media tab filter
+let asideView = "feed";     // aside: feed | log
 
-function applyTheme(theme) {
-  currentTheme = theme === "light" ? "light" : "dark";
-  document.documentElement.dataset.theme = currentTheme;
-  localStorage.setItem(THEME_KEY, currentTheme);
-}
-
-function renderThemeToggle() {
-  const next = currentTheme === "light" ? "dark" : "light";
-  return el("button", {
-    class: "theme-toggle",
-    type: "button",
-    title: `Switch to ${next} theme`,
-    "aria-label": `Switch to ${next} theme`,
-    "aria-pressed": currentTheme === "light" ? "true" : "false",
-    onclick: () => {
-      applyTheme(next);
-      render();
-    },
-  }, el("span", { class: "theme-toggle-icon", "aria-hidden": "true" }, currentTheme === "light" ? "☾" : "☀"));
-}
-
-applyTheme(currentTheme);
+// docs/design is dark-only — the board always renders the dark design.
+document.documentElement.dataset.theme = "dark";
 
 // ---------------------------------------------------------------------------
 // header slate
 // ---------------------------------------------------------------------------
 
-// Header status pill. Has a stable id so a status-only update can swap it
-// in place without rebuilding the board (see refresh()).
-function renderLivePill(s) {
-  const awaiting = s.stages.find((x) => x.status === "awaiting_human");
-  const inProgress = s.stages.find((x) => x.status === "in_progress");
-  const stalled = s.stages.find((x) => x.stalled);
+const STATUS_BADGE = {
+  run: { label: "Đang chạy", c: "#6EA8FF", bg: "rgba(110,168,255,0.14)" },
+  wait: { label: "Chờ bạn duyệt", c: "#F5B544", bg: "rgba(245,181,68,0.14)" },
+  queue: { label: "Xếp hàng", c: "#B3BAC6", bg: "rgba(179,186,198,0.14)" },
+  done: { label: "Xong", c: "#4CC38A", bg: "rgba(76,195,138,0.14)" },
+  fail: { label: "Lỗi", c: "#FF6B6B", bg: "rgba(255,107,107,0.14)" },
+  stall: { label: "Im lặng", c: "#FF6B6B", bg: "rgba(255,107,107,0.14)" },
+  idle: { label: "Đang nghỉ", c: "#9AA3B2", bg: "rgba(154,163,178,0.12)" },
+};
+
+function boardStatus(s) {
   const run = s.studio_run;
-  let liveEl;
-  if (run && run.status === "waiting_approval") {
-    liveEl = el("span", { class: "live" }, el("span", { class: "dot" }),
-      `◈ AWAITING YOU${run.pending_gate ? " · " + run.pending_gate.toUpperCase() : ""}`);
-  } else if (run && run.status === "running" && run.stalled_minutes) {
-    liveEl = el("span", { class: "live", style: "color:var(--red)" },
-      el("span", { class: "dot", style: "background:var(--red);animation:none" }),
-      `⚠ QUIET ${run.stalled_minutes}M`);
-  } else if (run && run.status === "running") {
-    liveEl = el("span", { class: "live" }, el("span", { class: "dot" }), "LIVE");
-  } else if (run && run.status === "queued") {
-    liveEl = el("span", { class: "live idle" }, el("span", { class: "dot" }),
-      `QUEUED${run.queue_position ? " #" + run.queue_position : ""}`);
-  } else if (run && run.status === "failed" && !inProgress && !awaiting) {
-    liveEl = el("span", { class: "live", style: "color:var(--red)" },
-      el("span", { class: "dot", style: "background:var(--red);animation:none" }), "FAILED");
-  } else if (awaiting) {
-    liveEl = el("span", { class: "live" }, el("span", { class: "dot" }), "◈ AWAITING YOU");
-  } else if (stalled) {
-    liveEl = el("span", { class: "live", style: "color:var(--red)" },
-      el("span", { class: "dot", style: "background:var(--red);animation:none" }), "⚠ STALLED?");
-  } else if (s.live || inProgress) {
-    liveEl = el("span", { class: "live" }, el("span", { class: "dot" }), "LIVE");
-  } else {
-    liveEl = el("span", { class: "live idle" }, el("span", { class: "dot" }),
-      `IDLE${s.last_activity ? " · " + fmtAgo(s.last_activity).toUpperCase() : ""}`);
-  }
-  liveEl.id = "live-pill";
-  return liveEl;
+  const declared = s.stages.filter((x) => !x.undeclared);
+  if ((run && run.status === "waiting_approval") || s.stages.some((x) => x.status === "awaiting_human")) return "wait";
+  if (run && run.status === "running") return run.stalled_minutes ? "stall" : "run";
+  if (run && run.status === "queued") return "queue";
+  const inProgress = s.stages.some((x) => x.status === "in_progress");
+  if (run && run.status === "failed" && !inProgress) return "fail";
+  if (s.stages.some((x) => x.stalled)) return "stall";
+  if (inProgress || s.live) return "run";
+  if ((declared.length && declared.every((x) => x.status === "completed")) || (run && run.status === "succeeded")) return "done";
+  return "idle";
 }
 
-function renderSlate(s) {
+function statusBadge(key, id) {
+  const b = STATUS_BADGE[key] || STATUS_BADGE.idle;
+  const badge = el("span", { class: "ds-badge", style: `color:${b.c};background:${b.bg}` }, el("i", {}), b.label);
+  if (id) badge.id = id;
+  return badge;
+}
+
+// Status badge in the aside header — stable id so a status-only update can
+// swap it in place without rebuilding the board (see refresh()).
+function renderLivePill(s) {
+  return statusBadge(boardStatus(s), "live-pill");
+}
+
+const LOGO_SVG = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="9" width="18" height="12" rx="2"></rect><path d="M3 9l3-6h14l-2 6"></path><path d="M9 3l-2 6M15 3l-2 6"></path></svg>';
+
+function navIcon(path) {
+  const span = el("span", { "aria-hidden": "true", style: "display:flex" });
+  span.innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${path}</svg>`;
+  return span;
+}
+
+function studioHome(run) {
+  try { return run && run.studio_url ? `${new URL(run.studio_url).origin}/projects` : null; } catch { return null; }
+}
+
+function renderSide(s) {
+  const run = s.studio_run;
+  const logo = el("span", { class: "ds-logo" });
+  logo.innerHTML = LOGO_SVG;
+  const home = studioHome(run);
+  const libHref = s.series ? `/?${new URLSearchParams({ series: s.series })}` : "/";
+  return el("nav", { class: "ds-side", "aria-label": "Điều hướng chính" },
+    el("a", { class: "ds-brand", href: "/" }, logo,
+      el("span", { class: "ds-brand-name" }, el("b", {}, "OpenMontage"), el("span", {}, "Backlot"))),
+    el("a", { class: "ds-nav-link", href: libHref },
+      navIcon('<rect x="3" y="3" width="7" height="7" rx="1.5"></rect><rect x="14" y="3" width="7" height="7" rx="1.5"></rect><rect x="3" y="14" width="7" height="7" rx="1.5"></rect><rect x="14" y="14" width="7" height="7" rx="1.5"></rect>'),
+      el("span", { class: "ds-nav-text" }, s.series ? `Thư viện · ${s.series}` : "Thư viện")),
+    el("a", { class: "ds-nav-link", href: location.pathname, "aria-current": "page", title: s.title },
+      navIcon('<rect x="2" y="5" width="20" height="14" rx="2"></rect><path d="M10 9l5 3-5 3z"></path>'),
+      el("span", { class: "ds-nav-text" }, s.title)),
+    home ? el("a", { class: "ds-nav-link", href: home, target: "_blank", rel: "noopener" },
+      navIcon('<path d="M14 4h6v6"></path><path d="M20 4l-9 9"></path><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"></path>'),
+      el("span", { class: "ds-nav-text" }, "Mở Studio")) : null,
+    el("div", { class: "ds-side-foot" },
+      run ? el("div", { class: "ds-side-box" },
+        el("span", { class: "ds-row" }, el("span", {}, "Run"), el("strong", {}, `#${run.run_number ?? "?"}`)),
+        el("span", {}, STUDIO_STATUS_TEXT[run.status] || run.status)) : null,
+      run && (run.agent_label || run.agent_id) ? el("div", { class: "ds-side-box" },
+        el("span", {}, "Agent"),
+        el("span", { class: "ds-agent" }, el("i", {}), [run.agent_label || run.agent_id, run.model].filter(Boolean).join(" · "))) : null,
+    ),
+  );
+}
+
+function renderHead(s) {
+  const run = s.studio_run;
   const board = s.storyboard;
   const chips = [
-    el("span", { class: "chip" }, `${s.pipeline.pipeline_type} pipeline`),
-    board && board.total_duration_seconds
-      ? el("span", { class: "chip" }, `${board.scenes.length} scenes · ${fmtDuration(board.total_duration_seconds)}`)
-      : null,
-    s.style_playbook ? el("span", { class: "chip" }, s.style_playbook) : null,
-  ];
+    stageLabel(s.pipeline.pipeline_type || "pipeline"),
+    board && board.scenes.length
+      ? `${board.scenes.length} cảnh${board.total_duration_seconds ? ` · ${fmtDuration(board.total_duration_seconds)}` : ""}` : null,
+    s.style_playbook,
+    run && (run.agent_label || run.agent_id) ? [run.agent_label || run.agent_id, run.model].filter(Boolean).join(" · ") : null,
+  ].filter(Boolean).map((t) => el("span", { class: "ds-chip" }, t));
 
-  const liveEl = renderLivePill(s);
+  const spent = s.cost ? (s.cost.total_spent_usd ?? 0) : 0;
+  const hasBudget = Boolean(s.cost && s.cost.budget_remaining_usd != null);
+  const budget = hasBudget ? spent + s.cost.budget_remaining_usd : null;
+  const pct = hasBudget && budget > 0 ? Math.min(100, (spent / budget) * 100) : 0;
+  const spentBox = el("div", { class: "ds-spent" },
+    el("span", { class: "ds-spent-row" }, el("span", {}, "Đã chi"),
+      el("span", {}, el("strong", {}, fmtMoney(spent)), hasBudget ? ` / ${fmtMoney(budget)}` : "")),
+    el("div", { class: "ds-bar" }, el("i", { class: pct > 90 ? "crit" : pct > 75 ? "warn" : "", style: `width:${pct}%` })));
 
-  const cost = el("div", { class: "cost" });
-  if (s.cost) {
-    const spent = s.cost.total_spent_usd ?? 0;
-    const budget = spent + (s.cost.budget_remaining_usd ?? 0);
-    const hasBudget = s.cost.budget_remaining_usd != null;
-    const pct = hasBudget && budget > 0 ? Math.min(100, (spent / budget) * 100) : 0;
-    cost.append(el("div", { class: "nums" }, el("b", {}, fmtMoney(spent)),
-      hasBudget ? el("span", {}, ` / ${fmtMoney(budget)}`) : ""));
-    if (hasBudget) {
-      cost.append(el("div", { class: "bar" }, el("i", {
-        class: pct > 90 ? "crit" : pct > 75 ? "warn" : "", style: `width:${pct}%`,
-      })));
-    }
-    cost.append(el("div", { class: "label" }, "generation spend"));
-  }
-
-  return el("header", { class: "slate" },
-    el("div", { class: "clapper" }),
-    el("div", {},
-      el("a", {
-        class: "wordmark", style: "text-decoration:none",
-        href: s.series ? `/?${new URLSearchParams({ series: s.series })}` : "/",
-        title: s.series ? `Back to series ${s.series}` : "Back to library",
-      }, s.series ? `Backlot / ${s.series}` : "Backlot"),
-      el("h1", {}, s.title),
+  const canReplay = !replay && replayBounds(state);
+  return el("header", { class: "ds-head" },
+    el("div", { class: "ds-head-left" },
+      el("span", { class: "ds-crumbs" }, el("a", { href: s.series ? `/?${new URLSearchParams({ series: s.series })}` : "/" }, "Thư viện"), ` / ${s.title}`),
+      el("div", { class: "ds-title-row" },
+        el("h1", {}, s.title),
+        el("span", { class: "ds-id" }, `${s.project_id}${run && run.run_number ? ` · run #${run.run_number}` : ""}`)),
+      chips.length ? el("div", { class: "ds-chips" }, chips) : null,
     ),
-    ...chips,
-    el("div", { class: "spacer" }),
-    renderThemeToggle(),
-    liveEl,
-    cost,
+    el("div", { class: "ds-head-right" },
+      spentBox,
+      canReplay ? el("button", { type: "button", class: "ds-btn blue", onclick: startReplay }, "▶ Xem lại run") : null,
+      run && run.studio_url ? el("a", { class: "ds-btn", href: run.studio_url, target: "_blank", rel: "noopener" }, "Mở trong Studio") : null,
+    ),
   );
 }
 
@@ -258,9 +270,9 @@ function reviewSummaryText(review) {
   const counts = reviewMetrics(review);
   return [
     review.decision,
-    `${counts.critical} critical`,
-    `${counts.suggestions} suggestion${counts.suggestions === 1 ? "" : "s"}`,
-    nested.review_focus_met ? `review focus ${nested.review_focus_met}` : null,
+    `${counts.critical} lỗi nặng`,
+    `${counts.suggestions} gợi ý`,
+    nested.review_focus_met ? `trọng tâm ${nested.review_focus_met}` : null,
     nested.schema_validation,
   ].filter(Boolean).join(" · ");
 }
@@ -276,9 +288,9 @@ function renderDrawer(s) {
     const metrics = reviewMetrics(st.review);
     const summary = reviewSummaryText(st.review);
     body.append(el("div", { class: "findings", style: "margin-bottom:12px" },
-      el("span", { class: `f ${metrics.critical ? "crit" : ""}` }, `${metrics.critical} critical`),
-      el("span", { class: `f ${metrics.suggestions ? "sugg" : ""}` }, `${metrics.suggestions} suggestions`),
-      el("span", { class: "f" }, `${metrics.nitpicks} nitpicks`),
+      el("span", { class: `f ${metrics.critical ? "crit" : ""}` }, `${metrics.critical} lỗi nặng`),
+      el("span", { class: `f ${metrics.suggestions ? "sugg" : ""}` }, `${metrics.suggestions} gợi ý`),
+      el("span", { class: "f" }, `${metrics.nitpicks} góp ý nhỏ`),
       summary ? el("span", { style: "font-size:calc(11.5px * var(--fs-scale));color:var(--text-2);margin-left:8px" }, summary) : null,
     ));
   }
@@ -296,16 +308,16 @@ function renderDrawer(s) {
   }
   if (!shown) {
     body.append(el("div", { class: "hint" },
-      st.status === "pending" ? "This stage hasn't run yet." : "No canonical artifact found on disk for this stage."));
+      st.status === "pending" ? "Stage này chưa chạy." : "Không tìm thấy artifact của stage này trên đĩa."));
   }
 
   return el("div", { class: "drawer" },
     el("div", { class: "drawer-head" },
-      el("h3", {}, `${st.name} — ${st.status}`),
-      st.gate_skipped ? el("span", { class: "gate-chip" }, "⚑ GATE SKIPPED") : null,
+      el("h3", {}, `${stageLabel(st.name)} — ${{ completed: "xong", in_progress: "đang chạy", awaiting_human: "chờ bạn duyệt", failed: "lỗi", pending: "chưa chạy" }[st.status] || st.status}`),
+      st.gate_skipped ? el("span", { class: "gate-chip" }, "⚑ Bỏ qua gate") : null,
       st.versions > 1 ? el("span", { class: "ver-chip" }, `v${st.versions}`) : null,
       st.timestamp ? el("span", { class: "meta", style: "font-family:var(--mono);font-size:calc(10.5px * var(--fs-scale));color:var(--text-3)" }, st.timestamp) : null,
-      el("span", { class: "close", onclick: () => toggleDrawer(st.name) }, "CLOSE ✕"),
+      el("span", { class: "close", onclick: () => toggleDrawer(st.name) }, "Đóng ✕"),
     ),
     body,
   );
@@ -337,28 +349,35 @@ function scriptSections(script, limit) {
   return nodes;
 }
 
-function renderScriptCard(s) {
+function renderScriptTab(s) {
   const script = s.artifacts.script;
-  if (!script) return null;
-  const scriptStage = s.stages.find((x) => x.name === "script");
-  const status = scriptStage ? scriptStage.status : "unknown";
-  const stamp = status === "completed"
-    ? el("span", { class: "script-status script-approved" }, "APPROVED")
-    : status === "awaiting_human"
-      ? el("span", { class: "script-status script-pending" }, "PENDING APPROVAL")
-      : status === "in_progress"
-        ? el("span", { class: "script-status script-draft" }, "DRAFTING")
-        : null;
-
-  const card = el("div", { class: "script-card script-preview", title: "Click to expand full script", onclick: openScriptModal },
-    stamp,
-    el("div", { class: "sp-title" }, script.title || s.title),
-    el("div", { class: "sp-meta" },
-      `script · ${fmtDuration(script.total_duration_seconds)} · ${(script.sections || []).length} sections`),
-    ...scriptSections(script, 4),
-    el("span", { class: "sp-expand" }, "⤢ EXPAND SCRIPT"),
-  );
-  return card;
+  if (!script) {
+    return [el("div", { class: "ds-empty" }, "Chưa có script.",
+      el("small", {}, "Script xuất hiện ở đây sau khi agent viết xong stage Script."))];
+  }
+  const sections = script.sections || [];
+  const board = s.storyboard;
+  const out = [el("div", { class: "ds-script-head" },
+    el("h2", {}, `Script · ${sections.length} cảnh${script.total_duration_seconds ? ` · ${fmtDuration(script.total_duration_seconds)}` : ""}`),
+    el("span", {}, "artifacts/script.json"))];
+  sections.forEach((sec, i) => {
+    const card = board && board.scenes.find((c) => c.section_id === sec.id || c.script_section_id === sec.id);
+    const audio = card && card.audio.find((a) => a.exists && (a.type === "narration" || a.type === "audio"));
+    out.push(el("article", { class: "ds-scene-row" },
+      el("div", { class: "when" }, el("b", {}, `Cảnh ${i + 1}`),
+        el("span", {}, `${fmtDuration(sec.start_seconds)}–${fmtDuration(sec.end_seconds)}`)),
+      el("div", { class: "what" },
+        sec.label ? el("span", {}, el("span", { class: "lbl" }, "Hình: "), sec.label) : null,
+        el("div", { class: "vo" }, el("span", { class: "lbl" }, "Lời dẫn:"),
+          sec.text ? el("em", {}, sec.text) : el("span", { class: "lbl" }, "Không lời.")),
+        sec.speaker_directions ? el("span", { class: "dir" }, `(${sec.speaker_directions})`) : null,
+        audio ? el("button", { type: "button", class: "ds-listen", onclick: () => {
+          player.src = mediaURL(s.project_id, audio.path); player.play();
+        } }, "▶ Nghe lời dẫn") : null,
+      ),
+    ));
+  });
+  return out;
 }
 
 function humanize(value) {
@@ -394,7 +413,7 @@ function titledItems(items, selectedId = null) {
     const detail = item.hook || item.why_this_works || item.summary || item.description || item.silhouette_notes;
     return el("li", { class: id && id === selectedId ? "selected" : "" },
       el("div", { class: "approval-item-title" }, shortText(title, 100),
-        id && id === selectedId ? el("span", { class: "approval-selected" }, "SELECTED") : null),
+        id && id === selectedId ? el("span", { class: "approval-selected" }, "ĐÃ CHỌN") : null),
       detail && detail !== title ? el("p", {}, shortText(detail)) : null,
     );
   }).filter(Boolean);
@@ -422,10 +441,10 @@ function artifactReviewContent(name, artifact) {
     return [
       artifact.hook ? el("p", { class: "approval-lead" }, artifact.hook) : null,
       reviewFacts([
-        reviewFact("platform", artifact.target_platform),
-        reviewFact("duration", artifact.target_duration_seconds != null ? fmtDuration(artifact.target_duration_seconds) : null),
-        reviewFact("tone", artifact.tone),
-        reviewFact("style", artifact.style),
+        reviewFact("Nền tảng", artifact.target_platform),
+        reviewFact("Thời lượng", artifact.target_duration_seconds != null ? fmtDuration(artifact.target_duration_seconds) : null),
+        reviewFact("Giọng điệu", artifact.tone),
+        reviewFact("Phong cách", artifact.style),
       ]),
       titledItems(artifact.key_points),
     ].filter(Boolean);
@@ -436,15 +455,15 @@ function artifactReviewContent(name, artifact) {
     const cost = artifact.cost_estimate || {};
     return [
       reviewFacts([
-        reviewFact("runtime", plan.render_runtime),
+        reviewFact("Renderer", plan.render_runtime),
         reviewFact("pipeline", plan.pipeline),
-        reviewFact("estimated cost", cost.total_estimated_usd != null ? fmtMoney(cost.total_estimated_usd) : null),
-        reviewFact("concepts", Array.isArray(artifact.concept_options) ? artifact.concept_options.length : null),
+        reviewFact("Ước tính chi phí", cost.total_estimated_usd != null ? fmtMoney(cost.total_estimated_usd) : null),
+        reviewFact("Số concept", Array.isArray(artifact.concept_options) ? artifact.concept_options.length : null),
       ]),
       titledItems(artifact.concept_options, selected),
       (artifact.selected_concept || {}).rationale
         ? el("p", { class: "approval-rationale" },
-          el("b", {}, "WHY THIS CONCEPT  "), shortText(artifact.selected_concept.rationale))
+          el("b", {}, "VÌ SAO CHỌN  "), shortText(artifact.selected_concept.rationale))
         : null,
     ].filter(Boolean);
   }
@@ -452,9 +471,9 @@ function artifactReviewContent(name, artifact) {
     return [
       artifact.topic ? el("p", { class: "approval-lead" }, artifact.topic) : null,
       reviewFacts([
-        reviewFact("sources", Array.isArray(artifact.sources) ? artifact.sources.length : null),
-        reviewFact("data points", Array.isArray(artifact.data_points) ? artifact.data_points.length : null),
-        reviewFact("angles", Array.isArray(artifact.angles_discovered) ? artifact.angles_discovered.length : null),
+        reviewFact("Nguồn", Array.isArray(artifact.sources) ? artifact.sources.length : null),
+        reviewFact("Số liệu", Array.isArray(artifact.data_points) ? artifact.data_points.length : null),
+        reviewFact("Góc kể", Array.isArray(artifact.angles_discovered) ? artifact.angles_discovered.length : null),
       ]),
       titledItems(artifact.angles_discovered),
     ].filter(Boolean);
@@ -463,11 +482,11 @@ function artifactReviewContent(name, artifact) {
     const first = (artifact.sections || [])[0];
     return [
       reviewFacts([
-        reviewFact("duration", fmtDuration(artifact.total_duration_seconds)),
-        reviewFact("sections", (artifact.sections || []).length),
+        reviewFact("Thời lượng", fmtDuration(artifact.total_duration_seconds)),
+        reviewFact("Số cảnh", (artifact.sections || []).length),
       ]),
       first && first.text ? el("p", { class: "approval-lead" }, shortText(first.text, 220)) : null,
-      el("p", { class: "approval-guidance" }, "The complete script preview is shown directly below."),
+      el("p", { class: "approval-guidance" }, "Toàn bộ script ở tab Script."),
     ].filter(Boolean);
   }
   if (name === "scene_plan") {
@@ -475,11 +494,11 @@ function artifactReviewContent(name, artifact) {
     const end = scenes.reduce((max, scene) => Math.max(max, Number(scene.end_seconds) || 0), 0);
     return [
       reviewFacts([
-        reviewFact("scenes", scenes.length),
-        reviewFact("duration", end ? fmtDuration(end) : null),
+        reviewFact("Số cảnh", scenes.length),
+        reviewFact("Thời lượng", end ? fmtDuration(end) : null),
       ]),
       titledItems(scenes),
-      el("p", { class: "approval-guidance" }, "Review timing and shot coverage in the storyboard below."),
+      el("p", { class: "approval-guidance" }, "Xem nhịp và khung hình từng cảnh ở tab Storyboard."),
     ].filter(Boolean);
   }
   if (name === "asset_manifest") {
@@ -487,19 +506,19 @@ function artifactReviewContent(name, artifact) {
     const types = [...new Set(assets.map((asset) => asset.type).filter(Boolean))];
     return [
       reviewFacts([
-        reviewFact("assets", assets.length),
-        reviewFact("types", types.join(", ")),
-        reviewFact("generation cost", artifact.total_cost_usd != null ? fmtMoney(artifact.total_cost_usd) : null),
+        reviewFact("Số file", assets.length),
+        reviewFact("Loại", types.join(", ")),
+        reviewFact("Chi phí tạo", artifact.total_cost_usd != null ? fmtMoney(artifact.total_cost_usd) : null),
       ]),
       titledItems(assets),
-      el("p", { class: "approval-guidance" }, "Inspect every generated take in the filmstrip below before approving compose."),
+      el("p", { class: "approval-guidance" }, "Xem từng file ở tab Storyboard và Media trước khi duyệt dựng video."),
     ].filter(Boolean);
   }
   if (name === "edit_decisions") {
     return [
       reviewFacts([
-        reviewFact("cuts", Array.isArray(artifact.cuts) ? artifact.cuts.length : null),
-        reviewFact("runtime", artifact.render_runtime || (artifact.metadata || {}).render_runtime),
+        reviewFact("Số cắt", Array.isArray(artifact.cuts) ? artifact.cuts.length : null),
+        reviewFact("Renderer", artifact.render_runtime || (artifact.metadata || {}).render_runtime),
       ]),
       titledItems(artifact.cuts),
     ].filter(Boolean);
@@ -507,15 +526,15 @@ function artifactReviewContent(name, artifact) {
   if (name === "render_report") {
     return [
       reviewFacts([
-        reviewFact("outputs", Array.isArray(artifact.outputs) ? artifact.outputs.length : null),
-        reviewFact("duration", artifact.duration_seconds != null ? fmtDuration(artifact.duration_seconds) : null),
+        reviewFact("Bản xuất", Array.isArray(artifact.outputs) ? artifact.outputs.length : null),
+        reviewFact("Thời lượng", artifact.duration_seconds != null ? fmtDuration(artifact.duration_seconds) : null),
       ]),
       titledItems(artifact.outputs),
     ].filter(Boolean);
   }
   if (name === "publish_log") {
     return [
-      reviewFacts([reviewFact("destinations", Array.isArray(artifact.entries) ? artifact.entries.length : null)]),
+      reviewFacts([reviewFact("Nơi đăng", Array.isArray(artifact.entries) ? artifact.entries.length : null)]),
       titledItems((artifact.entries || []).map((entry) => ({
         title: entry.platform || entry.destination || "Publish destination",
         description: [entry.status, entry.url].filter(Boolean).join(" · "),
@@ -565,30 +584,31 @@ function renderApprovalReview(s) {
 
   if (!artifacts.length) {
     artifacts.push(el("div", { class: "approval-missing", role: "alert" },
-      el("b", {}, "Nothing reviewable was found. "),
+      el("b", {}, "Không có gì để duyệt. "),
       names.length
-        ? `The ${awaiting.name} checkpoint declares ${names.map(humanize).join(", ")}, but Backlot could not load it.`
-        : `The ${awaiting.name} checkpoint does not declare an artifact.`,
+        ? `Checkpoint ${stageLabel(awaiting.name)} khai báo ${names.map(humanize).join(", ")} nhưng Backlot không đọc được file.`
+        : `Checkpoint ${stageLabel(awaiting.name)} không khai báo artifact nào.`,
     ));
   }
 
   return el("section", { class: "approval-review", "data-stage": awaiting.name },
     el("div", { class: "approval-review-head" },
-      el("div", {},
-        el("div", { class: "approval-eyebrow" }, "REVIEW GATE"),
-        el("h2", {}, `${humanize(awaiting.name)} is ready for your review`),
-        el("p", {}, "Review the artifact here, then reply in chat to approve it or request changes."),
-      ),
-      el("span", { class: "approval-status" }, "PENDING APPROVAL"),
+      el("span", { class: "approval-eyebrow" }, `${stageLabel(awaiting.name)} — chờ bạn duyệt`),
+      el("span", { class: "approval-status" }, "Đã dừng · chưa tốn thêm tiền cho tới khi bạn duyệt"),
     ),
-    reviewSummary ? el("div", { class: "approval-review-note" },
-      el("b", {}, "SELF-REVIEW  "), shortText(reviewSummary, 260)) : null,
-    el("div", { class: "approval-artifacts" }, artifacts),
+    el("div", { class: "approval-review-body" },
+      reviewSummary ? el("div", { class: "approval-review-note" },
+        el("b", {}, "TỰ ĐÁNH GIÁ  "), shortText(reviewSummary, 260)) : null,
+      el("div", { class: "approval-artifacts" }, artifacts),
+    ),
     el("div", { class: "approval-review-foot" },
       el("span", {}, nextStage
-        ? `Approval unlocks ${humanize(nextStage.name)}.`
-        : "This is the final approval gate."),
-      el("button", { type: "button", onclick: () => toggleDrawer(awaiting.name) }, "OPEN FULL ARTIFACT"),
+        ? `Duyệt xong sẽ chạy tiếp ${stageLabel(nextStage.name)}. Duyệt hoặc yêu cầu sửa trong Studio.`
+        : "Đây là bước duyệt cuối. Duyệt hoặc yêu cầu sửa trong Studio."),
+      el("span", { style: "display:flex;gap:10px;flex-wrap:wrap" },
+        el("button", { type: "button", class: "ds-btn small", onclick: () => toggleDrawer(awaiting.name) }, "Xem artifact đầy đủ"),
+        s.studio_run && s.studio_run.studio_url
+          ? el("a", { class: "ds-btn small primary", href: s.studio_run.studio_url, target: "_blank", rel: "noopener" }, "Duyệt trong Studio") : null),
     ),
   );
 }
@@ -636,91 +656,124 @@ modal.addEventListener("click", (e) => { if (e.target === modal) closeModal(); }
 // right rail: decisions, activity
 // ---------------------------------------------------------------------------
 
-function renderDecisions(s) {
+function currentDecisions(s) {
   const log = s.artifacts.decision_log;
   const decisions = (log && log.decisions) || [];
-  if (!decisions.length) return null;
-  const body = el("div", { class: "panel-body" });
-  // Collapse by category+subject: a decision that changed mid-run (e.g. voice
-  // openai_onyx → chirp3) is superseded by the later entry — show the CURRENT
-  // choice, not the first one recorded, and mark that it was revised.
+  // Collapse by category+subject: a decision that changed mid-run is
+  // superseded by the later entry — show the CURRENT choice, marked revised.
   const current = new Map();
   decisions.forEach((d, i) => {
     const key = `${d.category || "decision"}::${d.subject || ""}`;
     const prev = current.get(key);
     current.set(key, { d, order: i, revised: prev ? prev.revised + 1 : 0 });
   });
-  const shown = [...current.values()].sort((a, b) => b.order - a.order).slice(0, 8);
-  for (const { d, revised } of shown) {
-    const selLabel = (() => {
-      // Prefer the human label of the selected option over its bare id.
-      const opt = (d.options_considered || []).find((o) => (o.option_id ?? o.label) === d.selected);
-      return (opt && opt.label) || d.selected || "";
-    })();
-    const alts = (d.options_considered || [])
-      .filter((o) => (o.option_id ?? o.label) !== d.selected && (o.option_id || o.label));
-    body.append(el("div", { class: "decision" },
-      el("div", { class: "d-cat" }, `${d.category || "decision"}${d.confidence ? ` · ${d.confidence}` : ""}`,
-        revised ? el("span", { class: "d-revised" }, " · revised") : null),
-      el("div", { class: "d-pick" }, `${d.subject || ""} `, el("span", { class: "arrow" }, "→"), ` ${selLabel}`),
-      d.reason ? el("div", { class: "d-why" }, d.reason) : null,
-      alts.length ? el("div", { class: "d-alt" }, "also considered: ",
-        alts.slice(0, 3).map((o, i) => [i ? " · " : "", el("s", {}, o.label || o.option_id)]).flat()) : null,
-    ));
-  }
-  return el("div", { class: "panel" },
-    el("div", { class: "panel-head" }, el("h2", {}, "Decisions"), el("span", { class: "meta" }, "decision_log.json")),
-    body);
+  return [...current.values()].sort((a, b) => b.order - a.order).slice(0, 8);
 }
 
-function renderActivity(s) {
+function activityRows(s) {
   const events = s.events || [];
-  if (!events.length) return null;
-  const body = el("div", { class: "panel-body" });
   // A start is "running" only until a later finish/error for the same
-  // tool+scene closes it — closed starts are dropped (the finish row tells
-  // the story), unmatched starts render as live. Counted (not keyed-single)
-  // so parallel runs of the same tool on the same scene stay visible.
-  const open = new Map(); // key -> {count, ev}
+  // tool+scene closes it; unmatched starts render as live.
+  const open = new Map();
   const rows = [];
   for (const ev of events) {
     const key = `${ev.tool}:${ev.scene_id || ""}`;
     if (ev.event === "start") {
       const slot = open.get(key) || { count: 0, ev };
-      slot.count += 1;
-      slot.ev = ev;
-      open.set(key, slot);
+      slot.count += 1; slot.ev = ev; open.set(key, slot);
     } else {
       const slot = open.get(key);
-      if (slot) {
-        slot.count -= 1;
-        if (slot.count <= 0) open.delete(key);
-      }
+      if (slot) { slot.count -= 1; if (slot.count <= 0) open.delete(key); }
       rows.push(ev);
     }
   }
   for (const slot of open.values()) rows.push(slot.ev);
   rows.sort((a, b) => String(a.ts).localeCompare(String(b.ts)));
-  for (const ev of rows.slice(-10).reverse()) {
-    let statusEl;
-    if (ev.event === "finish") {
-      statusEl = el("span", { class: `status ${ev.success === false ? "err" : "ok"}` },
-        `${ev.success === false ? "✕" : "✓"}${ev.duration_s != null ? ` ${ev.duration_s.toFixed ? ev.duration_s.toFixed(1) : ev.duration_s}s` : ""}${ev.cost_usd ? ` ${fmtMoney(ev.cost_usd)}` : ""}`);
-    } else if (ev.event === "error") {
-      statusEl = el("span", { class: "status err" }, "✕");
-    } else {
-      statusEl = el("span", { class: "status run" }, "● running");
-    }
-    body.append(el("div", { class: "act-row" },
-      el("span", { class: "t" }, fmtClock(ev.ts)),
-      el("span", { class: "tool" }, ev.tool || ""),
-      el("span", { class: "target" }, ev.scene_id || ""),
-      statusEl,
-    ));
+  return rows;
+}
+
+function eventText(ev) {
+  const scene = ev.scene_id ? ` · ${sceneLabel(ev.scene_id)}` : "";
+  if (ev.event === "finish") {
+    const dur = ev.duration_s != null ? ` · ${Number(ev.duration_s).toFixed(1)}s` : "";
+    return { text: `${ev.tool}${scene} ${ev.success === false ? "✕ lỗi" : "✓"}${dur}${ev.cost_usd ? ` · ${fmtMoney(ev.cost_usd)}` : ""}`, cls: ev.success === false ? "err" : "ok" };
   }
-  return el("div", { class: "panel" },
-    el("div", { class: "panel-head" }, el("h2", {}, "Activity"), el("span", { class: "meta" }, "events.jsonl")),
-    body);
+  if (ev.event === "error") return { text: `${ev.tool}${scene} ✕ lỗi`, cls: "err" };
+  return { text: `${ev.tool}${scene} · đang chạy`, cls: "run" };
+}
+
+const isoClock = (iso) => (iso ? fmtClock(iso).replace(/:\d\d(\s|$)/, "$1").trim() : "");
+
+function renderAside(s) {
+  const run = s.studio_run;
+  const rows = activityRows(s);
+  const head = el("div", { class: "ds-aside-head" },
+    el("span", { class: "ds-aside-title" }, "Hoạt động của agent"), renderLivePill(s));
+  const views = el("div", { class: "ds-views", role: "group", "aria-label": "Kiểu xem" },
+    [["feed", "Hội thoại"], ["log", "Log kỹ thuật"]].map(([k, label]) => el("button", {
+      type: "button", "aria-pressed": String(asideView === k), onclick: () => { asideView = k; render(); },
+    }, label)));
+
+  let body;
+  if (asideView === "log") {
+    body = el("div", { class: "ds-log" });
+    for (const ev of rows.slice(-40)) {
+      const { text, cls } = eventText(ev);
+      body.append(el("div", {}, el("span", { class: "t" }, fmtClock(ev.ts)), el("span", { class: `m ${cls}` }, text)));
+    }
+    if (!rows.length) body.append(el("div", {}, el("span", { class: "m" }, "Chưa có sự kiện nào trong events.jsonl.")));
+  } else {
+    body = el("ol", { class: "ds-feed", "aria-live": "polite" });
+    const msg = (who, t, node) => el("li", { class: "ds-msg" }, el("span", { class: "who" }, `${who}${t ? ` · ${t}` : ""}`), node);
+    if (run && run.queued_at && run.status === "queued") {
+      body.append(msg("Studio", isoClock(run.queued_at), el("span", { class: "studio" },
+        `Run #${run.run_number ?? "?"} xếp hàng${run.queue_position ? `, vị trí ${run.queue_position}` : ""}`)));
+    }
+    if (run && run.started_at) {
+      body.append(msg("Studio", isoClock(run.started_at), el("span", { class: "studio" },
+        `Run #${run.run_number ?? "?"} bắt đầu · ${[run.agent_label || run.agent_id, run.model].filter(Boolean).join(" · ")}`)));
+    }
+    for (const st of s.stages.filter((x) => x.status === "completed" && x.timestamp)
+      .sort((a, b) => String(a.timestamp).localeCompare(String(b.timestamp))).slice(-6)) {
+      body.append(msg("Agent", isoClock(st.timestamp), el("div", { class: "bubble" },
+        `Xong ${stageLabel(st.name)}${st.gated && st.human_approved ? " · đã duyệt" : ""}.`)));
+    }
+    if (run && run.last_event && (run.status === "running" || run.status === "queued")) {
+      body.append(msg("Agent", isoClock(run.last_event_at), el("div", { class: "bubble" }, run.last_event)));
+    }
+    if (run && run.status === "waiting_approval") {
+      body.append(msg("Studio", isoClock(run.ended_at || run.updated_at), el("span", { class: "studio" },
+        `Dừng ở ${stageLabel(run.pending_gate || run.stage || "gate")}, chờ bạn duyệt.`)));
+    }
+    if (run && run.status === "failed") {
+      body.append(msg("Studio", isoClock(run.ended_at || run.updated_at), el("div", { class: "bubble err" },
+        `Run #${run.run_number ?? "?"} lỗi${run.error ? `: ${run.error}` : "."}`)));
+    }
+    if (run && run.status === "succeeded") {
+      body.append(msg("Studio", isoClock(run.ended_at || run.updated_at), el("span", { class: "studio" },
+        `Run #${run.run_number ?? "?"} kết thúc.`)));
+    }
+    if (!body.children.length) {
+      body.append(el("li", { class: "ds-msg" }, el("span", { class: "studio" }, "Chưa có hoạt động nào.")));
+    }
+  }
+
+  const note = el("p", { class: "ds-aside-note" },
+    run && run.studio_url ? "Backlot chỉ để xem. Muốn nhắn agent hoặc duyệt, mở project trong Studio." : "Backlot chỉ để xem — đọc trực tiếp từ thư mục project.");
+
+  const decisions = currentDecisions(s);
+  const dlog = decisions.length ? el("div", { class: "ds-decisions" },
+    el("span", {}, "Decision log"),
+    el("ul", {}, decisions.map(({ d, revised }) => {
+      const opt = (d.options_considered || []).find((o) => (o.option_id ?? o.label) === d.selected);
+      const pick = (opt && opt.label) || d.selected || "";
+      return el("li", {},
+        el("b", {}, `${d.subject || humanize(d.category || "decision")}: ${pick}`),
+        d.reason ? el("span", {}, d.reason) : null,
+        revised ? el("em", {}, "đã đổi") : null);
+    }))) : null;
+
+  return el("aside", { class: "ds-aside", "aria-label": "Hoạt động của agent" }, head, views, body, note, dlog);
 }
 
 // ---------------------------------------------------------------------------
@@ -734,203 +787,143 @@ function sceneLabel(id) {
   return String(id).toUpperCase().slice(0, 10);
 }
 
-function sceneCard(s, card) {
-  const dur = card.duration_seconds;
-  const width = Math.max(132, Math.min(300, 70 + (dur || 3) * 26));
-  const wrap = el("div", { class: "scene-card", style: `width:${width}px` });
-
-  const slate = el("div", { class: "sc-slate" },
-    el("span", { class: "num" }, sceneLabel(card.id)),
-    card.takes.length > 1 ? el("span", { class: "take" }, `T${card.takes.length}`) : null,
-    card.hero_moment ? el("span", { class: "hero" }, "★ HERO") : null,
-    el("span", { class: "dur" }, fmtDuration(dur)),
-  );
-  wrap.append(slate);
-
-  // visual slot
-  let thumb;
+function sceneThumb(s, card) {
   if (card.generating) {
-    thumb = el("div", { class: "thumb generating" },
-      el("div", { class: "shimmer" }),
-      el("div", { class: "gen-label" },
-        el("span", {}, "◉ GENERATING"),
-        el("span", { class: "sub" }, card.generating_tool || "")));
-  } else if (card.visual && card.visual.exists) {
-    const v = card.visual;
-    const badge = [v.model || v.source_tool, v.cost_usd != null ? fmtMoney(v.cost_usd) : null,
-      v.quality_score != null ? `q ${v.quality_score}` : null].filter(Boolean).join(" · ");
+    return el("div", { class: "thumb generating" }, `Đang tạo${card.generating_tool ? ` · ${card.generating_tool}` : ""}…`);
+  }
+  const v = card.visual;
+  if (v && v.exists) {
     if (v.type === "video") {
-      thumb = el("div", { class: "thumb approved" },
+      const thumb = el("div", { class: "thumb" },
         el("video", { src: mediaURL(s.project_id, v.path), muted: "", preload: "metadata", playsinline: "" }),
-        el("span", { class: "play" }, "▶"),
-        badge ? el("span", { class: "badge" }, badge) : null);
-      thumb.onclick = () => {
-        const vid = thumb.querySelector("video");
-        if (vid.paused) vid.play(); else vid.pause();
-      };
-    } else {
-      const img = el("img", { src: thumbURL(s.project_id, v.path, 640), loading: "lazy", alt: "" });
-      // A thumbnail that fails to load must never show a broken-image icon —
-      // fall back to the shot spec in place (F: broken links).
-      img.onerror = () => {
-        const t = img.closest(".thumb");
-        if (!t) return;
-        t.className = "thumb spec";
-        t.innerHTML = "";
-        t.append(el("div", { class: "spec-in" },
-          el("div", { class: "spec-desc" }, card.description || "asset unavailable"),
-          el("div", { class: "spec-shot" }, [card.framing, card.movement].filter(Boolean).join(" · ").slice(0, 70))));
-      };
-      thumb = el("div", { class: "thumb approved" }, img,
-        v.snapshot ? el("span", { class: "badge" }, "snapshot") : (badge ? el("span", { class: "badge" }, badge) : null));
+        el("span", { class: "play" }, "▶"));
+      thumb.onclick = () => { const vid = thumb.querySelector("video"); if (vid.paused) vid.play(); else vid.pause(); };
+      return thumb;
     }
-  } else if (card.type === "animation") {
-    // Bespoke/atelier scene with no snapshot yet — name it as such rather
-    // than "no asset yet" (the composition IS the asset).
-    thumb = el("div", { class: "thumb spec bespoke" },
-      el("div", { class: "spec-in" },
-        el("span", { class: "bespoke-tag" }, "◆ BESPOKE"),
-        el("div", { class: "spec-desc" }, card.description || ""),
-        el("div", { class: "spec-shot" }, "hand-authored composition")));
-  } else if (card.visual && !card.visual.exists) {
-    thumb = el("div", { class: "thumb missing" },
-      el("div", { class: "spec-in" },
-        el("span", { class: "warn-ic" }, "⚑"),
-        el("div", { class: "spec-desc" }, "asset in manifest, file missing"),
-        el("div", { class: "spec-shot" }, card.visual.path || "")));
-  } else if (card.type === "text_card") {
-    thumb = el("div", { class: "thumb textcard" },
-      el("div", { class: "tc-copy" }, (card.narration || card.description || "").slice(0, 48)));
-  } else if (card.required_assets.length) {
-    thumb = el("div", { class: "thumb missing" },
-      el("div", { class: "spec-in" },
-        el("span", { class: "warn-ic" }, "⚑"),
-        el("div", { class: "spec-desc" }, "no asset yet"),
-        el("div", { class: "spec-shot" }, (card.required_assets[0].description || "").slice(0, 60))));
-  } else {
-    thumb = el("div", { class: "thumb spec" },
-      el("div", { class: "spec-in" },
-        el("div", { class: "spec-desc" }, card.description || ""),
-        el("div", { class: "spec-shot" }, [card.framing, card.movement].filter(Boolean).join(" · ").slice(0, 70))));
+    const img = el("img", { src: thumbURL(s.project_id, v.path, 640), loading: "lazy", alt: "" });
+    img.onerror = () => { const t = img.closest(".thumb"); if (t) { t.className = "thumb missing"; t.textContent = "Không mở được ảnh"; } };
+    return el("div", { class: "thumb" }, img, v.snapshot ? el("span", { class: "badge" }, "snapshot") : null);
   }
-  wrap.append(thumb);
-
-  // shot language chips
-  const sl = card.shot_language;
-  if (sl) {
-    wrap.append(el("div", { class: "shotchips", style: "display:flex;flex-wrap:wrap;gap:4px;padding:7px 2px 0" },
-      [sl.shot_size, sl.camera_movement, sl.lens_mm ? `${sl.lens_mm}mm` : null, sl.lighting_key]
-        .filter(Boolean)
-        .map((t) => el("span", { style: "font-family:var(--mono);font-size:calc(8.5px * var(--fs-scale));letter-spacing:.04em;color:#62626c;border:1px solid #212129;border-radius:3px;padding:1px 5px" }, String(t).replaceAll("_", " ")))));
-  }
-
-  // takes drawer
-  if (card.takes.length > 1) {
-    const takes = el("div", { class: "takes" });
-    card.takes.forEach((t, i) => {
-      const isActive = card.visual && (
-        t === card.visual
-        || (t.path && t.path === card.visual.path)
-        || (t.id && t.id === card.visual.id)
-      );
-      const tk = el("span", { class: `tk${isActive ? " active" : ""}`, title: `take ${i + 1}` });
-      if (t.exists && t.type === "image") tk.append(el("img", { src: thumbURL(s.project_id, t.path, 320), loading: "lazy", alt: "" }));
-      takes.append(tk);
-    });
-    takes.append(el("span", { class: "tk-label" }, `${card.takes.length} TAKES`));
-    wrap.append(takes);
-  }
-
-  // narration + audio — clickable to read in full (F: narration text cut off)
-  if (card.narration) {
-    const long = card.narration.length > 90;
-    wrap.append(el("div", {
-      class: `narr${long ? " clip" : ""}`,
-      title: "Click to read the full narration",
-      onclick: () => openNarrModal(card),
-    }, card.narration, long ? el("span", { class: "narr-more" }, "⤢") : null));
-  } else if (card.shot_intent || card.description) {
-    wrap.append(el("div", { class: "narr tc-note" }, (card.shot_intent || card.description || "").slice(0, 110)));
-  }
-  const narrAudio = card.audio.find((a) => a.exists && (a.type === "narration" || a.type === "audio"));
-  if (narrAudio) {
-    const wave = el("div", { class: "wave", style: "cursor:pointer", title: "Play narration" });
-    waveBars(wave, card.id + narrAudio.path);
-    wave.append(el("span", { class: "wv-time" }, narrAudio.duration_seconds ? fmtDuration(narrAudio.duration_seconds) : "♪"));
-    wave.onclick = () => {
-      player.src = mediaURL(s.project_id, narrAudio.path);
-      player.play();
-    };
-    wrap.append(wave);
-  }
-  return wrap;
+  if (v && !v.exists) return el("div", { class: "thumb missing" }, "Có trong manifest, thiếu file");
+  if (card.required_assets.length) return el("div", { class: "thumb missing" }, "Chưa tạo — tạo ở stage Assets");
+  return el("div", { class: "thumb" }, el("div", { class: "spec-in" },
+    el("div", { class: "spec-desc" }, (card.description || "").slice(0, 80))));
 }
 
-function renderStoryboard(s) {
+function sceneTime(card) {
+  if (card.start_seconds != null && card.end_seconds != null) return `${fmtDuration(card.start_seconds)}–${fmtDuration(card.end_seconds)}`;
+  return fmtDuration(card.duration_seconds);
+}
+
+function sceneMethod(card) {
+  const v = card.visual;
+  if (v && v.exists) return v.type === "video" ? "Clip" : "Ảnh";
+  if (card.type === "text_card") return "Chữ động";
+  if (card.type === "animation") return "Hoạt hình";
+  return card.type ? humanize(card.type) : null;
+}
+
+function renderStoryboardTab(s) {
   const board = s.storyboard;
-  if (!board) return null;
-  const strip = el("div", { class: "filmstrip" });
-  for (const card of board.scenes) strip.append(sceneCard(s, card));
-  return el("div", {},
-    el("div", { class: "section-title" }, "Storyboard",
-      el("span", { class: "meta" },
-        `${board.scenes.length} scenes${board.total_duration_seconds ? ` · ${fmtDuration(board.total_duration_seconds)}` : ""} · card width ∝ duration`)),
-    el("div", { class: "strip-outer" }, strip));
+  if (!board || !board.scenes.length) {
+    return [el("div", { class: "ds-empty" }, "Chưa có storyboard.",
+      el("small", {}, "Storyboard xuất hiện ở đây sau stage Scene plan; ảnh và clip hiện dần khi agent tạo ở stage Assets."))];
+  }
+  const grid = el("div", { class: "ds-sb-grid" });
+  board.scenes.forEach((card, i) => {
+    const narr = card.audio.find((a) => a.exists && (a.type === "narration" || a.type === "audio"));
+    const method = sceneMethod(card);
+    grid.append(el("article", { class: "ds-sb-card" },
+      sceneThumb(s, card),
+      el("div", { class: "ds-sb-body" },
+        el("span", { class: "top" }, el("strong", {}, `Cảnh ${i + 1}`), el("span", {}, sceneTime(card))),
+        card.description || card.narration ? el("span", { class: "desc" }, card.description || card.narration) : null,
+        method ? el("span", { class: "method" }, method) : null,
+        narr || card.narration ? el("span", { class: "acts" },
+          narr ? el("button", { type: "button", onclick: () => { player.src = mediaURL(s.project_id, narr.path); player.play(); } }, "▶ Nghe lời dẫn") : null,
+          card.narration ? el("button", { type: "button", onclick: () => openNarrModal(card) }, "Đọc lời dẫn") : null) : null,
+      )));
+  });
+  return [grid];
 }
 
-// ---------------------------------------------------------------------------
-// renders + degraded media
-// ---------------------------------------------------------------------------
+function collectMedia(s) {
+  const seen = new Set();
+  const items = { image: [], video: [], narration: [], music: [] };
+  const add = (kind, path, meta) => {
+    if (!path || seen.has(path)) return;
+    seen.add(path);
+    items[kind].push({ path, meta });
+  };
+  const board = s.storyboard;
+  (board ? board.scenes : []).forEach((card, i) => {
+    const label = `Cảnh ${i + 1}`;
+    for (const t of [card.visual, ...(card.takes || [])].filter((x) => x && x.exists && x.path)) {
+      add(t.type === "video" ? "video" : "image", t.path, [label, t.source_tool || t.model].filter(Boolean).join(" · "));
+    }
+    for (const a of (card.audio || []).filter((x) => x.exists && x.path)) {
+      add(a.type === "music" ? "music" : "narration", a.path, [label, a.source_tool, a.duration_seconds ? fmtDuration(a.duration_seconds) : null].filter(Boolean).join(" · "));
+    }
+  });
+  for (const m of s.media.music || []) add("music", m.path, "Nhạc");
+  for (const snap of s.media.snapshots || []) add("image", snap.path, "Snapshot");
+  return items;
+}
 
-function renderRenders(s) {
+const MEDIA_KINDS = [["image", "Ảnh"], ["video", "Clip"], ["narration", "Lời dẫn"], ["music", "Nhạc"]];
+
+function renderMediaTab(s) {
+  const items = collectMedia(s);
+  const total = MEDIA_KINDS.reduce((n, [k]) => n + items[k].length, 0);
+  if (!total) {
+    return [el("div", { class: "ds-empty" }, "Chưa có file nào.",
+      el("small", {}, "Ảnh, clip, lời dẫn và nhạc xuất hiện ở đây khi agent tạo ở stage Assets."))];
+  }
+  if (!mediaKind || !items[mediaKind].length) mediaKind = (MEDIA_KINDS.find(([k]) => items[k].length) || ["image"])[0];
+  const filter = el("div", { class: "ds-filter" }, MEDIA_KINDS.filter(([k]) => items[k].length).map(([k, label]) =>
+    el("button", { type: "button", class: "ds-pill", "aria-pressed": String(mediaKind === k), onclick: () => { mediaKind = k; render(); } },
+      `${label} · ${items[k].length}`)));
+  const list = el("ul", { class: "ds-media" });
+  for (const m of items[mediaKind]) {
+    const url = mediaURL(s.project_id, m.path);
+    let thumb;
+    if (mediaKind === "image") thumb = el("span", { class: "mt" }, el("img", { src: thumbURL(s.project_id, m.path, 160), loading: "lazy", alt: "" }));
+    else if (mediaKind === "video") thumb = el("span", { class: "mt" }, el("video", { src: url, muted: "", preload: "metadata" }));
+    else thumb = el("button", { type: "button", class: "mt", style: "border:0;cursor:pointer", title: "Nghe", onclick: () => { player.src = url; player.play(); } }, "▶");
+    list.append(el("li", {}, thumb,
+      el("span", { class: "mi" }, el("b", {}, m.path), m.meta ? el("span", {}, m.meta) : null),
+      el("a", { href: url, target: "_blank", rel: "noopener" }, "Mở")));
+  }
+  return [filter, list];
+}
+
+function renderVideoTab(s) {
   const renders = s.media.renders;
-  if (!renders.length) return null;
+  if (!renders.length) {
+    return [el("div", { class: "ds-empty" }, "Chưa có bản render.",
+      el("small", {}, "Video xuất hiện ở đây sau stage Compose: trình phát, nút Tải MP4, dung lượng."))];
+  }
   if (activeRender >= renders.length) activeRender = 0;
   const current = renders[activeRender];
-  // Full re-renders (every SSE refresh) must not reset an in-progress
-  // watch: carry playback position/state over to the recreated element.
-  const prev = document.querySelector(".render-hero video");
   const src = mediaURL(s.project_id, current.path);
-  // preload="metadata" gives the element its intrinsic aspect ratio (and a
-  // poster frame) before playback — without it a portrait 9:16 render sits
-  // in a letterboxed 100%-wide black box that reads as landscape.
+  // Carry playback position over a rebuild so a watch is never reset.
+  const prev = document.querySelector(".ds-video video");
   const video = el("video", { src, controls: "", preload: "metadata" });
-  // Click the frame to start playback (controls handle pause/scrub) — the
-  // big player was inert to a click on the picture itself.
-  video.addEventListener("click", () => { if (video.paused) video.play().catch(() => {}); });
   if (prev && prev.getAttribute("src") === src && (prev.currentTime > 0 || !prev.paused)) {
     const t = prev.currentTime;
     const wasPlaying = !prev.paused && !prev.ended;
     video.addEventListener("loadedmetadata", () => { video.currentTime = t; }, { once: true });
-    video.setAttribute("preload", "metadata");
     if (wasPlaying) video.autoplay = true;
   }
-  const versions = el("div", { class: "render-meta" },
-    renders.map((r, i) => el("span", {
-      class: `v${i === activeRender ? " active" : ""}`,
-      onclick: () => { activeRender = i; render(); },
-    }, `${r.path.split("/").pop()}${r.at_root ? " · root" : ""}`)),
-    el("span", { style: "margin-left:auto" }, `${(current.size / 1048576).toFixed(1)} MB`),
-  );
-  return el("div", {},
-    el("div", { class: "section-title" }, "Renders",
-      el("span", { class: "meta" }, `${renders.length} version${renders.length === 1 ? "" : "s"}`)),
-    el("div", { class: "render-hero" }, video),
-    versions);
-}
-
-function renderFoundMedia(s) {
-  // Degraded view: show discovered snapshots when there's no storyboard.
-  if (s.storyboard || !s.media.snapshots.length) return null;
-  const grid = el("div", { class: "found-grid" });
-  for (const snap of s.media.snapshots.slice(0, 12)) {
-    grid.append(el("div", { class: "thumb" },
-      el("img", { src: thumbURL(s.project_id, snap.path, 640), loading: "lazy", alt: "" })));
-  }
-  return el("div", {},
-    el("div", { class: "section-title" }, "What the watcher found",
-      el("span", { class: "meta" }, "snapshots / verification frames")),
-    grid);
+  const when = current.mtime ? new Date(current.mtime * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : null;
+  return [el("div", { class: "ds-video" },
+    video,
+    el("div", { class: "ds-video-meta" },
+      el("span", {}, el("strong", {}, current.path), ` · ${(current.size / 1048576).toFixed(1)} MB${when ? ` · ${when}` : ""}`),
+      el("a", { class: "ds-btn primary", style: "min-height:40px", href: src, download: current.path.split("/").pop() }, "Tải MP4")),
+    renders.length > 1 ? el("div", { class: "ds-filter" }, renders.map((r, i) => el("button", {
+      type: "button", class: "ds-pill", "aria-pressed": String(i === activeRender), onclick: () => { activeRender = i; render(); },
+    }, `${r.path.split("/").pop()}${r.at_root ? " · root" : ""}`))) : null)];
 }
 
 // Studio run strip — OpenMontage Studio writes studio_run.json next to the
@@ -953,75 +946,104 @@ function fmtSince(epoch) {
   return `${Math.floor(d / 3600)} giờ ${Math.floor((d % 3600) / 60)} phút`;
 }
 
+function currentStageName(s) {
+  const kinds = railKinds(s);
+  const st = s.stages.find((x) => ["run", "stall", "wait", "queue"].includes(kinds.get(x.name)));
+  return st ? st.name : (s.studio_run && s.studio_run.stage) || null;
+}
+
+// Overview run card (Board.dc.html: "Agent đang …" / "Đang xếp hàng" /
+// "Xong"); lives in #studio-run-slot so status-only updates swap it in place.
 function renderStudioRun(s) {
   const run = s.studio_run;
-  if (!run) return null;
-  const color = run.status === "failed" || run.stalled_minutes ? "var(--red)"
-    : run.status === "running" || run.status === "waiting_approval" ? "var(--amber)"
-    : "var(--text-3)";
-  const who = [run.agent_label || run.agent_id, run.model].filter(Boolean).join(" · ");
-  let status = STUDIO_STATUS_TEXT[run.status] || run.status;
-  if (run.status === "queued" && run.queue_position) status += ` (vị trí ${run.queue_position})`;
-  if (run.status === "waiting_approval" && run.pending_gate) status += ` · ${run.pending_gate}`;
-  const timing = run.status === "running" && run.started_at_epoch
-    ? ` · đã chạy ${fmtSince(run.started_at_epoch)}`
-    : run.status === "queued" && run.queued_at_epoch
-      ? ` · chờ ${fmtSince(run.queued_at_epoch)}`
-      : "";
-  const parts = [
-    el("b", { style: `color:${color}` },
-      `Studio · Run #${run.run_number ?? "?"} ${status}`),
-    `${who ? " · " + who : ""}${timing}`,
-  ];
-  if (run.last_event && (run.status === "running" || run.status === "queued")) {
-    parts.push(el("br", {}), "Hoạt động cuối: ",
-      el("code", {}, run.last_event),
-      run.last_event_at_epoch ? ` (${fmtSince(run.last_event_at_epoch)} trước)` : "");
+  const st = boardStatus(s);
+  const who = run ? [run.agent_label || run.agent_id, run.model].filter(Boolean).join(" · ") : "";
+  const stage = currentStageName(s);
+  if (run && run.status === "running") {
+    const quiet = run.stalled_minutes;
+    const log = el("ol", { class: "ds-runlog" });
+    for (const ev of activityRows(s).slice(-3)) {
+      const { text, cls } = eventText(ev);
+      log.append(el("li", { class: cls === "err" ? "err" : "" }, el("span", { class: "t" }, isoClock(ev.ts)), el("span", { class: "x" }, text)));
+    }
+    if (run.last_event) {
+      log.append(el("li", { class: "now" }, el("span", { class: "t" }, isoClock(run.last_event_at)), el("span", { class: "x" }, run.last_event)));
+    }
+    return el("article", { class: `ds-run ${quiet ? "fail" : "run"}`, "aria-label": "Agent đang chạy" },
+      el("div", { class: "ds-run-head" },
+        quiet ? null : el("span", { class: "ds-pulse" }),
+        el("h2", {}, quiet ? `Agent im lặng ${quiet} phút` : `Agent đang chạy${stage ? ` ${stageLabel(stage)}` : ""}…`),
+        el("span", { class: "meta" }, [`run #${run.run_number ?? "?"}`, run.started_at_epoch ? fmtSince(run.started_at_epoch) : null, who].filter(Boolean).join(" · "))),
+      log.children.length ? log : null,
+      el("p", { class: "note" }, quiet
+        ? "Không có hoạt động mới. Mở log trong Studio để xem agent có bị treo không."
+        : "Backlot cập nhật khi agent ghi file. Muốn nhắn agent, mở project trong Studio."),
+    );
   }
-  if (run.stalled_minutes) {
-    parts.push(el("br", {}), el("b", { style: "color:var(--red)" },
-      `Agent im lặng ${run.stalled_minutes} phút — kiểm tra log trong Studio.`));
+  if (run && run.status === "queued") {
+    return el("article", { class: "ds-run queue", "aria-label": "Đang xếp hàng" },
+      el("div", { class: "ds-run-head" },
+        el("h2", {}, `Đang xếp hàng${run.queue_position ? ` · vị trí ${run.queue_position}` : ""}`),
+        el("span", { class: "meta" }, `Run #${run.run_number ?? "?"} bắt đầu khi có chỗ trống${run.queued_at_epoch ? ` · chờ ${fmtSince(run.queued_at_epoch)}` : ""}.`)),
+      el("p", { class: "note" }, "Chưa tốn thêm tiền khi xếp hàng."));
   }
-  if (run.status === "failed" && run.error) {
-    parts.push(el("br", {}), el("span", { style: "color:var(--red)" }, run.error));
+  if (run && run.status === "failed") {
+    return el("article", { class: "ds-run fail", "aria-label": "Run lỗi" },
+      el("div", { class: "ds-run-head" },
+        el("span", { class: "kicker", style: "color:var(--ds-red)" }, "Lỗi"),
+        el("h2", {}, `Run #${run.run_number ?? "?"} dừng vì lỗi`),
+        who ? el("span", { class: "meta" }, who) : null),
+      run.error ? el("p", { class: "note" }, run.error) : null);
   }
-  if (run.studio_url) {
-    parts.push(" ", el("a", { href: run.studio_url, target: "_blank", rel: "noopener",
-      style: "color:var(--amber)" }, "Mở trong Studio ↗"));
+  if (run && run.status === "waiting_approval" && !s.stages.some((x) => x.status === "awaiting_human")) {
+    const gate = stageLabel(run.pending_gate || run.stage || "gate");
+    return el("section", { class: "approval-review", "data-stage": run.pending_gate || "" },
+      el("div", { class: "approval-review-head" },
+        el("span", { class: "approval-eyebrow" }, `${gate} — chờ bạn duyệt`),
+        el("span", { class: "approval-status" }, "Đã dừng · chưa tốn thêm tiền cho tới khi bạn duyệt")),
+      el("div", { class: "approval-review-body" },
+        el("p", {}, `Agent đã dừng ở ${gate}. Duyệt hoặc yêu cầu sửa trong Studio.`)),
+      run.studio_url ? el("div", { class: "approval-review-foot" }, el("span", {}),
+        el("a", { class: "ds-btn small primary", href: run.studio_url, target: "_blank", rel: "noopener" }, "Duyệt trong Studio")) : null);
   }
-  return el("div", { class: "notice", style: `border-color:${color}` },
-    el("span", { style: "font-size:calc(15px * var(--fs-scale))" },
-      run.status === "running" ? "●" : run.status === "failed" ? "⚠" : "◌"),
-    el("span", {}, ...parts));
+  if (st === "done" && s.media.renders.length) {
+    const r = s.media.renders[0];
+    const src = mediaURL(s.project_id, r.path);
+    return el("article", { class: "ds-run done", "aria-label": "Video đã xong" },
+      el("div", { class: "ds-run-head" },
+        el("span", { class: "kicker", style: "color:var(--ds-green)" }, "Xong"),
+        el("h2", {}, `${r.path.split("/").pop()} · ${(r.size / 1048576).toFixed(1)} MB`),
+        el("span", { class: "meta" }, [run ? `${run.run_number ?? "?"} run` : null, s.cost ? `đã chi ${fmtMoney(s.cost.total_spent_usd ?? 0)}` : null].filter(Boolean).join(" · "))),
+      el("video", { src, controls: "", preload: "metadata" }),
+      el("div", { class: "ds-run-actions" },
+        el("a", { class: "ds-btn green", style: "min-height:40px", href: src, download: r.path.split("/").pop() }, "Tải MP4"),
+        replayBounds(state) ? el("button", { type: "button", class: "ds-btn", style: "min-height:40px", onclick: startReplay }, "▶ Xem lại cả quá trình") : null,
+        el("button", { type: "button", class: "ds-link-btn", onclick: () => { activeTab = "video"; render(); } }, "Mở tab Video →")));
+  }
+  return null;
 }
 
 function renderNoState(s) {
   if (s.has_pipeline_state) return null;
   const run = s.studio_run;
-  if (run && (run.status === "running" || run.status === "queued")) {
-    return el("div", { class: "notice", style: "border-color:#2b2b33;background:var(--surface-2);color:var(--text-3)" },
-      el("span", { style: "font-size:calc(15px * var(--fs-scale))" }, "◌"),
-      el("span", {},
-        el("b", { style: "color:var(--text-2)" },
-          run.status === "queued" ? "Run đang xếp hàng. " : "Agent đang chuẩn bị… "),
-        "Chưa có checkpoint nào — các bước sẽ sáng dần khi agent ghi kết quả từng stage."));
-  }
-  return el("div", { class: "notice", style: "border-color:#2b2b33;background:var(--surface-2);color:var(--text-3)" },
-    el("span", { style: "font-size:calc(15px * var(--fs-scale))" }, "◌"),
-    el("span", {},
-      el("b", { style: "color:var(--text-2)" }, "No pipeline state. "),
-      "This project has no checkpoints — Backlot is showing what it found on disk. ",
-      "Runs that follow the checkpoint protocol get the full board."));
+  const active = run && (run.status === "running" || run.status === "queued");
+  return el("div", { class: "ds-empty" },
+    active ? "Chưa có checkpoint nào." : "Project này chưa có trạng thái pipeline.",
+    el("small", {}, active
+      ? "Các bước trên thanh tiến trình sẽ sáng dần khi agent ghi kết quả từng stage."
+      : "Backlot đang hiện những gì tìm thấy trên đĩa. Run theo checkpoint protocol sẽ có đủ bảng."));
 }
 
-function renderAwaitingNotice(s) {
-  const awaiting = s.stages.find((x) => x.status === "awaiting_human");
-  if (!awaiting) return null;
-  return el("div", { class: "notice" },
-    el("span", { style: "font-size:calc(16px * var(--fs-scale))" }, "◈"),
-    el("span", {},
-      el("b", {}, `The ${awaiting.name} stage is waiting for your review. `),
-      "The agent is paused at this gate — reply ", el("b", {}, "in chat"), " to approve or request changes."));
+function renderBrief(s) {
+  const brief = s.artifacts.brief || {};
+  const research = s.artifacts.research_brief || {};
+  const text = brief.hook || brief.topic || brief.summary || research.topic;
+  if (!text) return null;
+  const facts = [brief.target_platform, brief.target_duration_seconds ? fmtDuration(brief.target_duration_seconds) : null, brief.tone].filter(Boolean);
+  return el("div", { style: "display:flex;flex-direction:column;gap:10px" },
+    el("h3", { class: "ds-section-h" }, "Brief"),
+    el("p", { class: "ds-p" }, text),
+    facts.length ? el("div", { class: "ds-chips" }, facts.map((f) => el("span", { class: "ds-chip outline" }, f))) : null);
 }
 
 // ---------------------------------------------------------------------------
@@ -1111,26 +1133,18 @@ function stateAt(s, T) {
 }
 
 function renderReplayBar(s) {
-  const bounds = replayBounds(s);
-  if (!bounds) return null;
-  if (!replay) {
-    // collapsed: just the entry button
-    return el("div", { class: "replay-bar", style: "justify-content:flex-end" },
-      el("span", { class: "rp-time" }, "scrub the whole run"),
-      el("span", { class: "rp-btn", onclick: startReplay }, "▶ REPLAY RUN"));
-  }
+  if (!replay) return null;
   const pos = (replay.t - replay.t0) / Math.max(1, replay.t1 - replay.t0);
-  const timeLabel = el("span", { class: "rp-time" },
-    new Date(replay.t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }));
+  const fmt = (t) => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  const timeLabel = el("span", { class: "rp-time" }, fmt(replay.t));
   const setT = (value) => {
     replay.t = replay.t0 + (Number(value) / 1000) * (replay.t1 - replay.t0);
-    timeLabel.textContent = new Date(replay.t)
-      .toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    timeLabel.textContent = fmt(replay.t);
   };
-  return el("div", { class: "replay-bar" },
-    el("span", { class: "rp-btn", onclick: toggleReplayPlay }, replay.playing ? "❚❚" : "▶"),
+  return el("div", { class: "replay-bar", role: "region", "aria-label": "Xem lại run" },
+    el("button", { type: "button", class: "rp-btn", onclick: toggleReplayPlay, "aria-label": replay.playing ? "Tạm dừng" : "Phát" }, replay.playing ? "❚❚" : "▶"),
     el("input", {
-      type: "range", min: "0", max: "1000", value: String(Math.round(pos * 1000)),
+      type: "range", min: "0", max: "1000", value: String(Math.round(pos * 1000)), "aria-label": "Thời điểm",
       // A full render() would destroy this slider mid-drag: while dragging,
       // only pause + track the time label; re-render the board on release.
       onpointerdown: () => { replay.playing = false; },
@@ -1138,7 +1152,8 @@ function renderReplayBar(s) {
       onchange: (e) => { setT(e.target.value); render(); },
     }),
     timeLabel,
-    el("span", { class: "rp-btn", onclick: stopReplay }, "✕ LIVE"),
+    el("button", { type: "button", class: "rp-btn", onclick: stopReplay }, "Thoát xem lại"),
+    el("span", { class: "rp-note" }, `Đang xem trạng thái lúc ${fmt(replay.t)}. Bấm Thoát xem lại để về trạng thái hiện tại.`),
   );
 }
 
@@ -1188,57 +1203,61 @@ function tickReplay() {
 // page assembly
 // ---------------------------------------------------------------------------
 
+const TABS = [["overview", "Tổng quan"], ["script", "Script"], ["storyboard", "Storyboard"], ["media", "Media"], ["video", "Video"]];
+
+function tabCount(s, key) {
+  if (key === "script") return (s.artifacts.script && (s.artifacts.script.sections || []).length) || 0;
+  if (key === "storyboard") return (s.storyboard && s.storyboard.scenes.length) || 0;
+  if (key === "media") { const m = collectMedia(s); return MEDIA_KINDS.reduce((n, [k]) => n + m[k].length, 0); }
+  if (key === "video") return s.media.renders.length;
+  return 0;
+}
+
+function renderTabCard(s) {
+  const tabs = el("div", { class: "ds-tabs", role: "tablist", "aria-label": "Chế độ xem" },
+    TABS.map(([key, label]) => {
+      const n = tabCount(s, key);
+      return el("button", {
+        type: "button", role: "tab", class: "ds-tab", "aria-selected": String(activeTab === key),
+        onclick: () => { activeTab = key; render(); },
+      }, label, n ? el("span", { class: "n" }, String(n)) : null);
+    }));
+  const body = el("div", { class: "ds-tabbody", role: "tabpanel" });
+  if (activeTab === "overview") {
+    const slot = el("div", { id: "studio-run-slot", style: "display:contents" });
+    const runCard = replay ? null : renderStudioRun(s);
+    if (runCard) slot.append(runCard);
+    body.append(slot);
+    const review = renderApprovalReview(s);
+    if (review) body.append(review);
+    const noState = renderNoState(s);
+    if (noState) body.append(noState);
+    const brief = renderBrief(s);
+    if (brief) body.append(brief);
+    if (!body.textContent.trim() && !body.querySelector("video")) {
+      body.append(el("div", { class: "ds-empty" }, "Chưa có gì để hiện.",
+        el("small", {}, "Xem từng bước ở thanh tiến trình, hoặc mở các tab Script, Storyboard, Video.")));
+    }
+  } else if (activeTab === "script") body.append(...renderScriptTab(s));
+  else if (activeTab === "storyboard") body.append(...renderStoryboardTab(s));
+  else if (activeTab === "media") body.append(...renderMediaTab(s));
+  else if (activeTab === "video") body.append(...renderVideoTab(s));
+  return el("section", { class: "ds-card", "aria-label": "Nội dung project" }, tabs, body);
+}
+
 function render() {
   if (!state) return;
   const s = replay ? stateAt(state, replay.t) : state;
   document.title = `Backlot — ${s.title}`;
   document.body.classList.toggle("first", firstPaint);
   firstPaint = false;
-  app.innerHTML = "";
-  app.append(renderSlate(s));
-  app.append(renderRail(s));
+  const main = el("main", { class: "ds-main" }, renderHead(s), renderRail(s));
   const replayBar = renderReplayBar(state);
-  if (replayBar) app.append(replayBar);
+  if (replayBar) main.append(replayBar);
   const drawer = renderDrawer(s);
-  if (drawer) app.append(drawer);
-  // Stable slot so status-only updates can swap the strip in place.
-  const studioSlot = el("div", { id: "studio-run-slot" });
-  const studioRun = replay ? null : renderStudioRun(s);
-  if (studioRun) studioSlot.append(studioRun);
-  app.append(studioSlot);
-  const awaitingNotice = renderAwaitingNotice(s);
-  if (awaitingNotice) app.append(awaitingNotice);
-  const noState = renderNoState(s);
-  if (noState) app.append(noState);
-
-  const main = el("div", { class: "main-col" });
-  const approvalReview = renderApprovalReview(s);
-  if (approvalReview) main.append(approvalReview);
-  const script = renderScriptCard(s);
-  if (script) main.append(script);
-  const aside = el("aside", {});
-  const decisions = renderDecisions(s);
-  const activity = renderActivity(s);
-  if (decisions) aside.append(decisions);
-  if (activity) aside.append(activity);
-
-  // Media sections live INSIDE the main column so a tall decisions rail
-  // never pushes them below the fold — the column flows beside the rail.
-  const storyboard = renderStoryboard(s);
-  const found = renderFoundMedia(s);
-  const renders = renderRenders(s);
-
-  if (approvalReview || script || decisions || activity) {
-    for (const section of [storyboard, found, renders]) {
-      if (section) main.append(section);
-    }
-    const hasAside = Boolean(decisions || activity);
-    app.append(el("div", { class: `board${hasAside ? "" : " solo"}` }, main, hasAside ? aside : null));
-  } else {
-    for (const section of [storyboard, found, renders]) {
-      if (section) app.append(section);
-    }
-  }
+  if (drawer) main.append(drawer);
+  main.append(renderTabCard(s));
+  app.replaceChildren(el("div", { class: "ds-shell" }, renderSide(s), main, renderAside(s)));
 }
 
 // Defensive normalization (F-02): the server contract guarantees these
@@ -1278,7 +1297,11 @@ let pendingFull = false;
 
 function contentSig(s) {
   const { studio_run, last_activity, live, ...rest } = s;
-  return JSON.stringify(rest);
+  const run = studio_run ? { ...studio_run } : null;
+  if (run) {
+    for (const k of ["last_event", "last_event_at", "last_event_at_epoch", "updated_at", "updated_at_epoch", "stalled_minutes"]) delete run[k];
+  }
+  return JSON.stringify([rest, run]);
 }
 
 function boardMediaPlaying() {
@@ -1325,10 +1348,10 @@ for (const type of ["pause", "ended"]) {
 }
 
 refresh().catch((err) => {
-  app.innerHTML = "";
-  app.append(el("div", { class: "empty", style: "margin-top:80px" },
-    el("div", { class: "big" }, "PROJECT NOT FOUND"),
-    el("div", {}, String(err))));
+  app.replaceChildren(el("div", { class: "ds-main", style: "max-width:720px;margin:80px auto" },
+    el("div", { class: "ds-empty" }, "Không tìm thấy project.",
+      el("small", {}, String(err)),
+      el("a", { class: "ds-link-btn", href: "/" }, "← Về thư viện"))));
 });
 // ?static=1 disables the live feed (screenshots, static exports).
 if (!new URLSearchParams(location.search).has("static")) {

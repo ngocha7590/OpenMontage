@@ -211,7 +211,7 @@ def test_static_navigation_invalid_route_and_active_takes(staged_backlot_server)
         page = browser.new_page(viewport={"width": 1560, "height": 1000})
         try:
             page.goto(staged_backlot_server + "/?static=1", wait_until="networkidle")
-            href = page.locator("a.lib-card").first.get_attribute("href")
+            href = page.locator("a.ds-lib-card").first.get_attribute("href")
             assert href and "static=1" in href
 
             response = page.goto(
@@ -219,11 +219,15 @@ def test_static_navigation_invalid_route_and_active_takes(staged_backlot_server)
                 wait_until="networkidle",
             )
             assert response and response.status == 200
-            assert "PROJECT NOT FOUND" in page.locator("body").inner_text()
+            assert "Không tìm thấy project" in page.locator("body").inner_text()
 
             page.goto(staged_backlot_server + "/p/the-last-lighthouse?static=1", wait_until="networkidle")
             page.wait_for_timeout(300)
-            assert page.locator(".takes .tk.active").count() >= 1
+            # docs/design board: scenes live in the Storyboard tab; the active
+            # take is the card's visual
+            page.get_by_role("tab", name="Storyboard").click()
+            assert page.locator(".ds-sb-card").count() >= 1
+            assert page.locator(".ds-sb-card .thumb img, .ds-sb-card .thumb video").count() >= 1
         finally:
             browser.close()
 
@@ -250,13 +254,13 @@ def test_every_canonical_gate_promotes_its_artifact_before_approval(
             )
             review = page.locator(f'.approval-review[data-stage="{stage}"]')
             assert review.is_visible()
-            assert review.get_by_text("PENDING APPROVAL", exact=True).is_visible()
+            assert review.get_by_text("chờ bạn duyệt").first.is_visible()
             assert "[object Object]" not in review.inner_text()
             artifact = review.locator(f'[data-artifact="{artifact_name}"]')
             assert artifact.is_visible()
             assert visible_text in artifact.inner_text()
 
-            review.get_by_role("button", name="OPEN FULL ARTIFACT").click()
+            review.get_by_role("button", name="Xem artifact đầy đủ").click()
             assert page.locator(".drawer").is_visible()
             assert visible_text in page.locator(".drawer").inner_text()
         finally:
@@ -269,8 +273,11 @@ def test_script_gate_keeps_script_visible_and_marks_pending_approval(staged_back
         page = browser.new_page(viewport={"width": 1280, "height": 900})
         try:
             page.goto(staged_backlot_server + "/p/gate-script?static=1", wait_until="networkidle")
-            assert page.locator(".script-card").is_visible()
-            assert page.locator(".script-pending").inner_text() == "PENDING APPROVAL"
+            # gate card on the overview, full script one tab away, rail marks it
+            assert page.locator('.approval-review[data-stage="script"]').is_visible()
+            assert "Chờ bạn duyệt" in page.locator(".rail .stage.k-wait").inner_text()
+            page.get_by_role("tab", name="Script").click()
+            assert page.locator(".ds-scene-row").first.is_visible()
         finally:
             browser.close()
 

@@ -288,15 +288,15 @@ def create_app() -> FastAPI:
 
     @app.get("/p/{project_id}")
     async def board_page(project_id: str) -> HTMLResponse:
-        return _ui_html("board.html", ("board.css", "board.js"))
+        return _ui_html("board.html", ("board.css", "design.css", "board.js"))
 
     @app.get("/p/{project_path:path}")
     async def board_page_path(project_path: str) -> HTMLResponse:
-        return _ui_html("board.html", ("board.css", "board.js"))
+        return _ui_html("board.html", ("board.css", "design.css", "board.js"))
 
     @app.get("/")
     async def library_page() -> HTMLResponse:
-        return _ui_html("index.html", ("board.css", "library.js"))
+        return _ui_html("index.html", ("board.css", "design.css", "library.js"))
 
     if UI_DIR.is_dir():
         app.mount("/ui", StaticFiles(directory=UI_DIR), name="ui")

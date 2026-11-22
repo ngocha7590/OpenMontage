@@ -1,26 +1,31 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="vi">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Backlot — Library</title>
+<title>Backlot — Thư viện</title>
 <link rel="stylesheet" href="/ui/board.css">
+<link rel="stylesheet" href="/ui/design.css">
 </head>
 <body>
-<div class="wrap">
-  <header class="slate">
-    <div class="clapper"></div>
-    <div>
-      <a class="wordmark" href="/" style="text-decoration:none">Backlot</a>
-      <h1 id="title">Library</h1>
+<div class="ds-shell">
+  <nav class="ds-side" aria-label="Điều hướng chính" id="side"></nav>
+  <main class="ds-main">
+    <header class="ds-lib-head">
+      <div>
+        <h1 id="title">Thư viện</h1>
+        <p id="subtitle">Mọi project trên máy này, đọc trực tiếp từ thư mục project của OpenMontage.</p>
+      </div>
+      <span class="ds-badge" id="liveBadge" style="color:#9AA3B2;background:rgba(154,163,178,0.12)"><i></i><span id="liveText">Đang nghỉ</span></span>
+    </header>
+    <div class="ds-lib-tools">
+      <input class="ds-search" id="q" type="search" placeholder="Tìm theo tên hoặc pipeline" aria-label="Tìm project">
+      <div class="ds-filter" id="filters" role="group" aria-label="Lọc theo trạng thái"></div>
     </div>
-    <span class="chip" id="count"></span>
-    <div class="spacer"></div>
-    <span class="live idle" id="liveBadge"><span class="dot"></span><span id="liveText">IDLE</span></span>
-  </header>
-  <nav class="lib-nav" id="nav" hidden></nav>
-  <div class="lib-grid" id="grid"></div>
-  <p class="hint" id="empty" style="display:none">No projects yet — run a production and it will appear here.</p>
+    <div class="ds-filter" id="nav" hidden></div>
+    <div class="ds-lib-grid" id="grid"></div>
+    <div class="ds-empty" id="empty" style="display:none"></div>
+  </main>
 </div>
 <script type="module" src="/ui/library.js"></script>
 </body>
