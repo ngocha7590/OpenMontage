@@ -1,0 +1,232 @@
+name: product-ad
+version: "0.1"
+description: >
+  Product commercial from real product photos. The agent plans shots, builds a
+  reviewable storyboard (one keyframe per shot, generated from the product
+  images so shape, colour and label stay faithful), stops for approval, then
+  animates only the approved frames with image-to-video (first/last frame when
+  the provider supports it). Narration and/or music, edit, render, publish.
+category: generated
+stability: beta
+default_checkpoint_policy: guided
+
+extensions:
+  custom_scripts: true
+  custom_playbooks: true
+  custom_skills: true
+  custom_tools: false
+
+required_skills:
+  - pipelines/product-ad/executive-producer
+  - pipelines/product-ad/proposal-director
+  - pipelines/product-ad/script-director
+  - pipelines/product-ad/scene-director
+  - pipelines/product-ad/storyboard-director
+  - pipelines/product-ad/asset-director
+  - pipelines/product-ad/edit-director
+  - pipelines/product-ad/compose-director
+  - pipelines/product-ad/publish-director
+  - creative/commercial-product-video
+  - meta/reviewer
+  - meta/checkpoint-protocol
+
+orchestration:
+  mode: executive-producer
+  skill: pipelines/product-ad/executive-producer
+  budget_default_usd: 2.00
+  max_revisions_per_stage: 3
+  max_send_backs: 3
+  max_wall_time_minutes: 30
+
+compatible_playbooks:
+  recommended:
+    - clean-professional
+  also_works:
+    - flat-motion-graphics
+    - minimalist-diagram
+  custom_allowed: true
+
+stages:
+  - name: proposal
+    skill: pipelines/product-ad/proposal-director
+    required_artifacts_in: []
+    optional_artifacts_in:
+      - source_media_review
+    produces:
+      - proposal_packet
+      - decision_log
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus:
+      - Product inventory separates identity references from style references and flags missing views
+      - Invariants (silhouette, colour, transparency, controls, label layout) are listed explicitly
+      - Shot list uses deliberate roles (hero, detail, use, effect, packshot) with a clear peak and landing
+      - Every shot names its control (image_to_video, first_last_frame, packshot_still) and why
+      - Image and video providers follow the brief (image_provider / video_provider); "auto" is stated as such
+      - Clip length limits of the chosen video provider are reflected in shot durations
+      - Cost estimate is per shot (keyframes + clips + retries) and inside the budget
+    success_criteria:
+      - Schema-valid proposal_packet artifact
+      - Delivery promise present with motion_required true
+      - Shot list with control per shot and per-shot cost
+
+  - name: script
+    skill: pipelines/product-ad/script-director
+    required_artifacts_in:
+      - proposal_packet
+    produces:
+      - script
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus:
+      - Narration fits the duration (or the script is explicitly music-only when brief.audio = music_only)
+      - Every claim is supported by the brief; no invented specs or efficacy
+      - On-screen copy and CTA are short and placed on the packshot/end card
+    success_criteria:
+      - Schema-valid script artifact
+      - Sections map one-to-one to planned shots
+
+  - name: scene_plan
+    skill: pipelines/product-ad/scene-director
+    required_artifacts_in:
+      - script
+      - proposal_packet
+    produces:
+      - scene_plan
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: false
+    review_focus:
+      - metadata.commercial_product carries sku, identity_references, invariants and shots[] per scene
+      - Each shot has start_state, end_state, allowed_change, acceptance and a supported control
+      - Scene lengths respect the video provider's clip length
+    success_criteria:
+      - Schema-valid scene_plan artifact
+      - Every scene has a matching metadata.commercial_product.shots entry
+
+  - name: storyboard
+    skill: pipelines/product-ad/storyboard-director
+    required_artifacts_in:
+      - scene_plan
+    optional_artifacts_in:
+      - proposal_packet
+    produces:
+      - storyboard
+    required_tools:
+      - storyboard_frames
+    tools_available:
+      - storyboard_frames
+      - image_selector
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus:
+      - Every keyframe matches the product photos (shape, colour, transparency, part count, label)
+      - Start/end frames of first_last_frame shots differ only by the planned state change
+      - Composition leaves room for copy where the plan needs it; no generated text or watermark
+      - Reviewer notes per scene (messages with a scene) were applied only to those scenes
+    success_criteria:
+      - Schema-valid storyboard artifact
+      - Every scene has a start_frame that exists on disk
+
+  - name: assets
+    skill: pipelines/product-ad/asset-director
+    required_artifacts_in:
+      - storyboard
+      - scene_plan
+    optional_artifacts_in:
+      - script
+      - proposal_packet
+    produces:
+      - asset_manifest
+    required_tools:
+      - storyboard_animate
+    tools_available:
+      - storyboard_animate
+      - video_selector
+      - image_selector
+      - tts_selector
+      - music_gen
+      - pixabay_music
+      - freesound_music
+      - audio_enhance
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus:
+      - Clips are generated only from approved storyboard frames (image_to_video), never text-to-video
+      - Product identity holds through each clip, not just its first frame
+      - Retries stay within the per-scene attempt cap and the budget
+      - Narration and music follow brief.audio
+    success_criteria:
+      - Schema-valid asset_manifest artifact
+      - Every non-packshot scene has a clip registered with its scene_id
+      - All referenced asset files exist on disk
+
+  - name: edit
+    skill: pipelines/product-ad/edit-director
+    required_artifacts_in:
+      - scene_plan
+      - asset_manifest
+    optional_artifacts_in:
+      - script
+      - storyboard
+    produces:
+      - edit_decisions
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: false
+    review_focus:
+      - Clips trimmed to their planned length without cutting the shot's event
+      - Packshot held long enough to read the CTA; copy placed in reserved space
+    success_criteria:
+      - Schema-valid edit_decisions artifact
+      - Edit decisions cover the full planned runtime
+
+  - name: compose
+    skill: pipelines/product-ad/compose-director
+    required_artifacts_in:
+      - edit_decisions
+      - asset_manifest
+    optional_artifacts_in:
+      - scene_plan
+    produces:
+      - render_report
+      - final_review
+    required_tools:
+      - video_compose
+      - audio_mixer
+    tools_available:
+      - video_compose
+      - audio_mixer
+      - video_trimmer
+      - video_stitch
+      - color_grade
+      - audio_enhance
+    checkpoint_required: true
+    human_approval_default: false
+    review_focus:
+      - Product identity survives crop, grade, transitions and compression at the delivery aspect ratio
+      - CTA and product name are legible on the end card
+    success_criteria:
+      - Schema-valid render_report artifact
+      - Output file exists and passes ffprobe validation
+
+  - name: publish
+    skill: pipelines/product-ad/publish-director
+    required_artifacts_in:
+      - render_report
+      - final_review
+    optional_artifacts_in:
+      - proposal_packet
+      - script
+    produces:
+      - publish_log
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus:
+      - Poster frame is the packshot or hero frame
+      - Licence notes of the providers used are carried into the publish log
+    success_criteria:
+      - Schema-valid publish_log artifact

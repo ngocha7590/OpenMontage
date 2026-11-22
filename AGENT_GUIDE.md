@@ -254,6 +254,7 @@ If the folder has tracks, the proposal and asset stages should present them as o
 | `documentary-montage` | Retrieval-first montage of real footage from free stock and open archives | beta |
 | `animation` | Motion-graphics and animation-first videos | production |
 | `character-animation` | Local rigged cartoon characters and reusable character acting | beta |
+| `product-ad` | Commercial for one physical product from supplied photos: approved storyboard keyframes → image-to-video | beta |
 | `hybrid` | Source footage plus support visuals | production |
 | `avatar-spokesperson` | Presenter-led avatar or lip-sync videos | production |
 | `localization-dub` | Subtitle, dub, and translated variants | beta |
@@ -655,6 +656,8 @@ The YAML playbooks are the files in `styles/`; `list_playbooks()` in `styles/pla
 For custom, atelier, brand, launch, or hero work, read `skills/meta/taste-direction.md` before choosing a playbook. Carry its `taste_profile` into the proposal so later stages can preserve the design read, visual variance, motion intensity, information density, reference strategy, and anti-patterns.
 
 For physical-product ads, launch films, or promos with generated shots of a specific SKU, also read `skills/creative/commercial-product-video.md` for product references, shot controls, continuity, and final-cut review within the selected pipeline.
+
+When the user supplies photos of that product and wants a generated ad or promo, route to the **`product-ad`** pipeline: keyframes are generated from the photos with `storyboard_frames`, the user approves the storyboard, and only approved frames are animated with `storyboard_animate` (image-to-video, first/last frame where supported). The still-image-fallback prohibition still applies — only shots approved as `packshot_still` stay still.
 
 ### Hand-drawn "doodle" animation → Ink Theater / Ink Puppet
 
