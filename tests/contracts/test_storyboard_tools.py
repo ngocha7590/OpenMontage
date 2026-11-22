@@ -133,6 +133,7 @@ def test_frames_falls_back_across_allowed_providers(ws, monkeypatch):
     assert res.success and not res.data["failed"]
     assert [c["allowed_providers"] for c in sel.calls] == [["geminiweb"], ["muse"]]
     assert _sb(ws)["frames"][0]["start_frame"]["provider"] == "muse"
+    assert res.data["generated"][0]["fallback_errors"] == ["geminiweb: geminiweb down"]
 
 
 def test_frames_partial_failure_and_all_failed(ws, monkeypatch):
@@ -281,3 +282,15 @@ def test_registered():
     registry.discover()
     assert registry.get("storyboard_frames") is not None
     assert registry.get("storyboard_animate") is not None
+
+
+def test_failed_redo_restores_previous_frame(ws, img, monkeypatch):
+    _frames(ws, scenes=["hero"])
+    before = (ws / "assets/storyboard/hero_start.png").read_bytes()
+    down = FakeImageSelector(fail_scenes={"hero"})
+    monkeypatch.setattr(StoryboardFrames, "_selector", staticmethod(lambda: down))
+    res = _frames(ws, scenes=["hero"], overwrite=True, notes={"hero": "warped"})
+    assert not res.success
+    hero = _sb(ws)["frames"][0]
+    assert (ws / hero["start_frame"]["path"]).read_bytes() == before
+    assert "takes" not in hero and not list((ws / "assets/storyboard/takes").glob("*"))

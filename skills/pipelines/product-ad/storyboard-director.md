@@ -4,6 +4,10 @@
 
 One reviewable keyframe per scene (plus an end frame for `first_last_frame` shots), generated from the real product photos, recorded in `artifacts/storyboard.json`. This is the cheap gate: the user fixes composition and identity here, before any video is paid for.
 
+## Clean the references first
+
+Models copy whatever is in the reference — including a generator watermark (e.g. the Gemini ✦ sparkle in a corner), stamps or UI overlays. If a product photo carries one, make a cleaned copy in `inputs/clean/` and pass that as `identity_references`. Paint the mark out from the neighbouring background with Pillow: mask the bright mark pixels, interpolate each row from the unmasked pixels, then a light blur. Do not crop away product parts. Look at the cleaned crop before using it. Never alter the product itself.
+
 ## Generate
 
 ```

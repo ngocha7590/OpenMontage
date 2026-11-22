@@ -175,17 +175,18 @@ class StoryboardFrames(BaseTool):
         return done
 
     def _generate(self, selector: BaseTool, request: dict[str, Any], target: Path,
-                  allowed: list[str]) -> tuple[Any, str | None]:
+                  allowed: list[str]) -> tuple[Any, list[str]]:
         """Try each allowed provider in order (image_selector itself does not
-        fall back). Returns (result, error)."""
+        fall back). Returns (result or None, errors of the providers that failed)
+        — errors are kept on success too, so a skipped provider is reported."""
         errors: list[str] = []
         for attempt in [[p] for p in allowed] or [None]:
             req = dict(request, allowed_providers=attempt) if attempt else dict(request)
             result = selector.execute(req)
             if result.success and target.is_file():
-                return result, None
+                return result, errors
             errors.append(f"{attempt[0] + ': ' if attempt else ''}{result.error or 'no image written'}")
-        return None, " | ".join(errors)
+        return None, errors
 
     # ------------------------------------------------------------- execute --
     def execute(self, inputs: dict[str, Any]) -> ToolResult:
@@ -252,6 +253,7 @@ class StoryboardFrames(BaseTool):
 
             wanted = ["start"] + (["end"] if control == "first_last_frame" else [])
             scene_failed = False
+            moved: list[tuple[Path, Path]] = []  # (take, original) — undone if the scene fails
             for which in wanted:
                 key = f"{which}_frame"
                 target = out_dir / f"{slug(sid)}_{which}.png"
@@ -264,6 +266,7 @@ class StoryboardFrames(BaseTool):
                     keep = out_dir / "takes" / f"{slug(sid)}_{which}_{len(frame['takes']) + 1}.png"
                     keep.parent.mkdir(parents=True, exist_ok=True)
                     shutil.move(str(target), keep)
+                    moved.append((keep, target))
                     take = {"path": rel_to(ws, keep), "kind": key}
                     if frame.get("notes"):
                         take["rejected_reason"] = frame["notes"]
@@ -290,9 +293,9 @@ class StoryboardFrames(BaseTool):
                     "generation_mode": "edit",
                     "image_paths": [str(r) for r in refs[:MAX_REFS]],
                 }
-                result, error = self._generate(selector, request, target, list(inputs.get("allowed_providers") or []))
+                result, errors = self._generate(selector, request, target, list(inputs.get("allowed_providers") or []))
                 if result is None:
-                    failed.append({"scene_id": sid, "frame": which, "error": error})
+                    failed.append({"scene_id": sid, "frame": which, "error": " | ".join(errors)})
                     scene_failed = True
                     break
                 cost += float(result.cost_usd or 0.0)
@@ -304,9 +307,17 @@ class StoryboardFrames(BaseTool):
                     image["model"] = str(result.model)
                 frame[key] = image
                 written.append(str(target))
-                generated.append({"scene_id": sid, "frame": which, "path": image["path"]})
+                entry = {"scene_id": sid, "frame": which, "path": image["path"]}
+                if errors:
+                    entry["fallback_errors"] = errors  # providers skipped before this one worked
+                generated.append(entry)
 
             if scene_failed:
+                for keep, original in moved:  # put the last good frames back
+                    if keep.is_file():
+                        if original.is_file():
+                            original.unlink()  # a half-made frame of this scene
+                        shutil.move(str(keep), original)
                 if prev:
                     frames[sid] = prev  # keep the last good frame on failure
                 continue
