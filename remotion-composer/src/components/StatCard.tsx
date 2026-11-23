@@ -1,4 +1,5 @@
 import { AbsoluteFill, spring, useCurrentFrame, useVideoConfig } from "remotion";
+import { readableOn } from "../lib/contrast";
 
 interface StatCardProps {
   stat: string;
@@ -19,6 +20,7 @@ export const StatCard: React.FC<StatCardProps> = ({
   accentColor = "#F59E0B",
   backgroundColor = "#1F2937",
 }) => {
+  color = readableOn(backgroundColor, color);
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
 

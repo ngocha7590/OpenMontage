@@ -1,4 +1,5 @@
 import { AbsoluteFill, spring, useCurrentFrame, useVideoConfig } from "remotion";
+import { readableOn } from "../lib/contrast";
 
 interface TextCardProps {
   text: string;
@@ -13,6 +14,7 @@ export const TextCard: React.FC<TextCardProps> = ({
   color = "#FFFFFF",
   backgroundColor = "#1F2937",
 }) => {
+  color = readableOn(backgroundColor, color);
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
 

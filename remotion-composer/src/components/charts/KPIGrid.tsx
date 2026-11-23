@@ -5,6 +5,7 @@ import {
   useCurrentFrame,
   useVideoConfig,
 } from "remotion";
+import { readableOn } from "../../lib/contrast";
 
 interface Metric {
   label: string;
@@ -44,6 +45,8 @@ export const KPIGrid: React.FC<KPIGridProps> = ({
   negativeColor = "#EF4444",
   animationStyle = "count-up",
 }) => {
+  const titleColor = readableOn(backgroundColor, textColor);
+  const cardTextColor = readableOn(cardBackgroundColor, textColor);
   const frame = useCurrentFrame();
   const { fps, durationInFrames } = useVideoConfig();
 
@@ -95,7 +98,7 @@ export const KPIGrid: React.FC<KPIGridProps> = ({
             textAlign: "center",
             fontSize: 48,
             fontWeight: 700,
-            color: textColor,
+            color: titleColor,
             fontFamily,
             opacity:
               spring({ frame, fps, config: { damping: 20 } }) * fadeOut,
@@ -174,7 +177,7 @@ export const KPIGrid: React.FC<KPIGridProps> = ({
               <KPICardContent
                 metric={metric}
                 accentColor={accentColor}
-                textColor={textColor}
+                textColor={cardTextColor}
                 fontFamily={fontFamily}
                 positiveColor={positiveColor}
                 negativeColor={negativeColor}
@@ -220,7 +223,7 @@ export const KPIGrid: React.FC<KPIGridProps> = ({
             <KPICardContent
               metric={metric}
               accentColor={accentColor}
-              textColor={textColor}
+              textColor={cardTextColor}
               fontFamily={fontFamily}
               positiveColor={positiveColor}
               negativeColor={negativeColor}

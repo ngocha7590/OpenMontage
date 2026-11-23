@@ -5,6 +5,7 @@ import {
   useCurrentFrame,
   useVideoConfig,
 } from "remotion";
+import { readableOn } from "../../lib/contrast";
 
 interface PieDatum {
   label: string;
@@ -41,6 +42,7 @@ export const PieChart: React.FC<PieChartProps> = ({
   showLegend = true,
   animationStyle = "expand",
 }) => {
+  textColor = readableOn(backgroundColor, textColor);
   const frame = useCurrentFrame();
   const { fps, durationInFrames } = useVideoConfig();
 

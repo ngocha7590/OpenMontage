@@ -5,6 +5,7 @@ import {
   useCurrentFrame,
   useVideoConfig,
 } from "remotion";
+import { readableOn } from "../../lib/contrast";
 
 interface BarDatum {
   label: string;
@@ -40,6 +41,7 @@ export const BarChart: React.FC<BarChartProps> = ({
   animationStyle = "grow-up",
   barGap = 12,
 }) => {
+  textColor = readableOn(backgroundColor, textColor);
   const frame = useCurrentFrame();
   const { fps, durationInFrames } = useVideoConfig();
 

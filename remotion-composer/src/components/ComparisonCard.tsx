@@ -5,6 +5,7 @@ import {
   useCurrentFrame,
   useVideoConfig,
 } from "remotion";
+import { readableOn } from "../lib/contrast";
 
 type ChangeDirection = "up" | "down" | "neutral";
 
@@ -45,6 +46,8 @@ export const ComparisonCard: React.FC<ComparisonCardProps> = ({
   labelFontSize = 28,
   valueFontSize = 72,
 }) => {
+  const titleColor = readableOn(backgroundColor, textColor);
+  const labelColor = readableOn(cardBackgroundColor, textColor);
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
 
@@ -156,7 +159,7 @@ export const ComparisonCard: React.FC<ComparisonCardProps> = ({
               fontFamily,
               fontWeight: 700,
               fontSize: titleFontSize,
-              color: textColor,
+              color: titleColor,
               textAlign: "center",
               opacity: titleOpacity,
               letterSpacing: "-0.02em",
@@ -209,7 +212,7 @@ export const ComparisonCard: React.FC<ComparisonCardProps> = ({
                 fontFamily,
                 fontWeight: 600,
                 fontSize: labelFontSize,
-                color: textColor,
+                color: labelColor,
                 opacity: 0.7,
                 textTransform: "uppercase" as const,
                 letterSpacing: "0.05em",
@@ -333,7 +336,7 @@ export const ComparisonCard: React.FC<ComparisonCardProps> = ({
                 fontFamily,
                 fontWeight: 600,
                 fontSize: labelFontSize,
-                color: textColor,
+                color: labelColor,
                 opacity: 0.7,
                 textTransform: "uppercase" as const,
                 letterSpacing: "0.05em",

@@ -5,6 +5,7 @@ import {
   useCurrentFrame,
   useVideoConfig,
 } from "remotion";
+import { readableOn } from "../lib/contrast";
 
 type CalloutType = "info" | "warning" | "tip" | "quote";
 
@@ -52,6 +53,7 @@ export const CalloutBox: React.FC<CalloutBoxProps> = ({
   const resolvedBorder = borderColor || defaults.border;
   const resolvedBg = backgroundColor || defaults.bg;
   const resolvedIcon = icon || defaults.icon;
+  const bodyColor = readableOn(resolvedBg, textColor);
 
   // Slide-in from left with slight bounce
   const slideX = spring({
@@ -199,7 +201,7 @@ export const CalloutBox: React.FC<CalloutBoxProps> = ({
                 fontWeight: isQuote ? 400 : 400,
                 fontStyle: isQuote ? "italic" : "normal",
                 fontSize,
-                color: textColor,
+                color: bodyColor,
                 lineHeight: 1.6,
               }}
             >

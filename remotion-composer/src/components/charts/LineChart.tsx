@@ -5,6 +5,7 @@ import {
   useCurrentFrame,
   useVideoConfig,
 } from "remotion";
+import { readableOn } from "../../lib/contrast";
 
 interface DataPoint {
   x: number;
@@ -52,6 +53,7 @@ export const LineChart: React.FC<LineChartProps> = ({
   animationStyle = "draw",
   strokeWidth = 3,
 }) => {
+  textColor = readableOn(backgroundColor, textColor);
   const frame = useCurrentFrame();
   const { fps, durationInFrames } = useVideoConfig();
 

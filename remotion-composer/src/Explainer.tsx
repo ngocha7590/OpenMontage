@@ -205,6 +205,8 @@ interface Cut {
   rightLabel?: string;
   leftValue?: string;
   rightValue?: string;
+  leftColor?: string;
+  rightColor?: string;
   // Chart props
   chartData?: any[];
   chartSeries?: any[];
@@ -623,6 +625,7 @@ const SceneRenderer: React.FC<{ cut: Cut; theme: ThemeConfig }> = ({ cut, theme 
         leftValue={cut.leftValue} rightValue={cut.rightValue}
         title={cut.title} backgroundColor={bgColor} textColor={textColor}
         cardBackgroundColor={cut.cardBackgroundColor || theme.surfaceColor}
+        leftColor={cut.leftColor} rightColor={cut.rightColor}
       />
     );
   }
