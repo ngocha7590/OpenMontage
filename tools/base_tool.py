@@ -479,6 +479,15 @@ class BaseTool(ABC):
 
     # ---- Status reporting ----
 
+    def status_detail(self) -> str | None:
+        """Human-readable reason the tool is not AVAILABLE, or ``None``.
+
+        Tools with a clearer diagnosis than ``install_instructions`` (e.g.
+        "server up, model missing") override this; ``provider_menu`` shows
+        it next to ``status``.
+        """
+        return None
+
     def get_status(self) -> ToolStatus:
         """Check if this tool's dependencies are satisfied."""
         try:

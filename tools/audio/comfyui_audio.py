@@ -111,6 +111,14 @@ class ComfyUIAceStep15Music(BaseTool):
         _, missing = self._client.check_models(_ACE_MODELS)
         return ToolStatus.DEGRADED if missing else ToolStatus.AVAILABLE
 
+    def status_detail(self) -> str | None:
+        if self._client.is_available() and not self._client.has_node("TextEncodeAceStepAudio1.5"):
+            return (
+                f"ComfyUI server at {self._client.server_url} is missing the "
+                "ACE-Step 1.5 nodes (TextEncodeAceStepAudio1.5) — update ComfyUI."
+            )
+        return self._client.status_detail(_ACE_MODELS)
+
     def estimate_cost(self, inputs: dict[str, Any]) -> float:
         return 0.0
 
@@ -227,6 +235,9 @@ class ComfyUISFX(BaseTool):
             return ToolStatus.UNAVAILABLE
         _, missing = self._client.check_models(_SFX_MODELS)
         return ToolStatus.DEGRADED if missing else ToolStatus.AVAILABLE
+
+    def status_detail(self) -> str | None:
+        return self._client.status_detail(_SFX_MODELS)
 
     def estimate_cost(self, inputs: dict[str, Any]) -> float:
         return 0.0

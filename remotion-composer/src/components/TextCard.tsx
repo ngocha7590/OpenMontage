@@ -1,3 +1,4 @@
+import React from "react";
 import { AbsoluteFill, spring, useCurrentFrame, useVideoConfig } from "remotion";
 import { readableOn } from "../lib/contrast";
 
@@ -47,6 +48,8 @@ export const TextCard: React.FC<TextCardProps> = ({
           textAlign: "center",
           maxWidth: "80%",
           lineHeight: 1.3,
+          // even line lengths — avoids a lone last word ("gì?") on its own line
+          ...({ textWrap: "balance" } as React.CSSProperties),
         }}
       >
         {text}

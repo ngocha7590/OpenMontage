@@ -145,6 +145,9 @@ class ComfyUIImage(BaseTool):
             return ToolStatus.DEGRADED
         return ToolStatus.AVAILABLE
 
+    def status_detail(self) -> str | None:
+        return self._client.status_detail(_REQUIRED_MODELS)
+
     def estimate_cost(self, inputs: dict[str, Any]) -> float:
         return 0.0
 

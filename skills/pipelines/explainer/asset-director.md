@@ -100,6 +100,17 @@ For each script section:
 
 **Pronunciation guide**: If the script contains technical terms, jargon, or names with non-obvious pronunciation, include a pronunciation map in the TTS request.
 
+**Total narration vs target duration.** After the batch, sum the narration
+durations and compare with the brief's target runtime:
+- 90–105 % of target: fine.
+- Shorter than 90 %: do not pad with silence or stretch holds. Extend the
+  script where it helps the viewer (an example, a number, a one-line
+  recap) and re-synthesize those sections, or lower the TTS speed by at
+  most 10 % if the delivery stays natural. Record the decision.
+- Longer than 105 %: tighten the script and re-synthesize; do not speed up
+  the voice past natural delivery.
+Report the final narration total and the target at the gate.
+
 **Flat voice failure:** If the approved voice sounds monotone, robotic, rushed,
 or ignores intended pauses, do not batch the remaining sections. Revise the
 `voice_performance` plan or provider parameters and regenerate the sample.

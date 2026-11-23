@@ -323,6 +323,10 @@ class ToolRegistry:
                 "install_instructions": tool.install_instructions,
                 "status": status.value,
             }
+            if status != ToolStatus.AVAILABLE:
+                detail = tool.status_detail()
+                if detail:
+                    entry["status_detail"] = detail
             for extra_key in (
                 "source_provider_menu",
                 "source_provider_summary",

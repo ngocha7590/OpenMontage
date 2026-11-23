@@ -327,6 +327,10 @@ class ComfyUIVideo(BaseTool):
             return ToolStatus.DEGRADED
         return ToolStatus.UNAVAILABLE
 
+    def status_detail(self) -> str | None:
+        required = list(dict.fromkeys(_REQUIRED_MODELS_T2V + _REQUIRED_MODELS_I2V))
+        return self._client.status_detail(required)
+
     def operation_statuses(self) -> dict[str, str]:
         """Return per-operation readiness for selector routing and preflight."""
         if not self._client.is_available():

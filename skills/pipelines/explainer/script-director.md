@@ -129,6 +129,19 @@ Write each section with these fields:
 
 Count your words. If you're 20%+ over budget, the TTS will either rush or exceed duration. Cut ruthlessly.
 
+**Non-English narration.** The word table is for English. For other
+languages, budget in the unit the language is spoken in:
+- Vietnamese (one syllable per written word): about 3.5–4 syllables per
+  second at a conversational pace, so roughly 210–240 syllables for 60 s
+  of narration. Count syllables, not English-equivalent words.
+- Other languages: estimate from the TTS voice's measured rate on the
+  approved sample (seconds per word or syllable) and size the script to
+  the target duration.
+
+Under-budget scripts are the common failure here: a Vietnamese script
+sized with the English table comes out 15–25 % short. Aim for the
+narration to cover 90–100 % of the target runtime.
+
 #### Speaker Directions
 
 Write directions that TTS can actually implement. Prefer structured

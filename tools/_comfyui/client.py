@@ -166,6 +166,25 @@ class ComfyUIClient:
             f"Check that ComfyUI is running and the URL is correct."
         )
 
+    def status_detail(self, required: list[str]) -> str | None:
+        """Why a tool backed by this server is not ready, or ``None``.
+
+        Distinguishes "no server / unreachable" from "server is up but
+        models are missing", so agents do not report a configured endpoint
+        as unconfigured.
+        """
+        if not self.is_available():
+            return self.unavailable_reason()
+        _, missing = self.check_models(required)
+        if missing:
+            return (
+                f"ComfyUI server is reachable at {self.server_url} (endpoint is "
+                f"configured), but these models are not installed: "
+                f"{', '.join(missing)}. Install them on that server "
+                f"(ComfyUI/models/...) and retry."
+            )
+        return None
+
     def is_available(self) -> bool:
         """Return True if the ComfyUI server is reachable."""
         try:

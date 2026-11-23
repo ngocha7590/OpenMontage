@@ -98,6 +98,19 @@ downstream template (`hero_title`, `stat_card`, charts, `comparison`,
 `callout`, or `progress_bar`) in each description. These render entirely from
 Remotion components with zero external dependencies.
 
+**On-screen text language.** Everything the viewer reads in the video —
+chart titles, category and axis labels, legend entries, card labels, stat
+subtitles, callout text — is written in the brief's `language` (e.g.
+"Biển Baltic", "Thái Bình Dương" for a Vietnamese video, not "Baltic",
+"Pacific"). Proper nouns keep their usual local spelling. Scene
+descriptions and planning notes themselves stay in English.
+
+**Captions and charts.** When captions are burned in, the Remotion
+Explainer shrinks chart, card and callout scenes above the caption band
+automatically (`captionStyle.reserveSceneSpace`, default on). Do not place
+key labels in the bottom ~18 % of a full-bleed image scene that will carry
+captions.
+
 ### Step 4: Apply the Visual Technique Library
 
 These are proven patterns for explainer visuals. Reference them by name in scene descriptions:

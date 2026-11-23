@@ -312,6 +312,9 @@ export interface ExplainerProps {
     wordsPerPage?: number;
     fontSize?: number;
     bottomOffset?: number;
+    // default true: graphic scenes (charts, cards, callouts) are shrunk
+    // above the caption band so captions never cover their text
+    reserveSceneSpace?: boolean;
   };
   captionProps?: CaptionProps; // extra CaptionOverlay props, applied last
   audio?: AudioConfig;
@@ -560,6 +563,22 @@ const BackgroundVideoLayer: React.FC<{
       {children}
     </AbsoluteFill>
   );
+};
+
+// Scene types whose text sits near the bottom edge (axis labels, card
+// labels, body copy) — these get shrunk above burned-in captions.
+const CAPTION_BAND_TYPES = new Set([
+  "bar_chart", "line_chart", "pie_chart", "kpi_grid", "comparison",
+  "callout", "stat_card", "text_card", "terminal_scene",
+]);
+
+const reservesCaptionBand = (cut: Cut): boolean =>
+  CAPTION_BAND_TYPES.has(cut.type ?? "") && !cut.backgroundImage && !cut.backgroundVideo;
+
+// Same background SceneRenderer paints, so the caption band matches it.
+const sceneBackground = (cut: Cut, theme: ThemeConfig): string => {
+  const raw = cut.backgroundColor || theme.surfaceColor;
+  return raw === theme.backgroundColor || raw === "#0F172A" || raw === "#0f172a" ? "transparent" : raw;
 };
 
 const SceneRenderer: React.FC<{ cut: Cut; theme: ThemeConfig }> = ({ cut, theme }) => {
@@ -854,6 +873,17 @@ export const Explainer: React.FC<ExplainerProps> = (props) => {
   // Resolve theme from props — playbook name, theme name, or custom themeConfig
   const theme = resolveTheme(props as Record<string, unknown>);
 
+  // Height kept free for burned-in captions (one caption line + box
+  // padding + gap), using the same values CaptionOverlay receives below.
+  const captionFontSize =
+    props.captionProps?.fontSize ?? props.captionStyle?.fontSize ?? 42;
+  const captionBottom =
+    props.captionProps?.bottomOffset ?? props.captionStyle?.bottomOffset ?? 80;
+  const captionReserve =
+    captions && captions.length > 0 && props.captionStyle?.reserveSceneSpace !== false
+      ? Math.round(captionBottom + captionFontSize * 1.4 + 28 + 24)
+      : 0;
+
   return (
     <AbsoluteFill style={{ background: theme.backgroundColor, fontFamily: theme.headingFont || fontFamily }}>
       {/* Layer 0: Animated gradient background — driven by theme */}
@@ -866,7 +896,18 @@ export const Explainer: React.FC<ExplainerProps> = (props) => {
 
         return (
           <Sequence key={cut.id} from={from} durationInFrames={duration}>
-            <SceneRenderer cut={cut} theme={theme} />
+            {captionReserve > 0 && reservesCaptionBand(cut) ? (
+              // Burned-in captions sit at the bottom: shrink graphic scenes
+              // above the caption band so axis labels / card text stay
+              // visible; the scene background still fills the full frame.
+              <AbsoluteFill style={{ background: sceneBackground(cut, theme) }}>
+                <AbsoluteFill style={{ height: `calc(100% - ${captionReserve}px)`, bottom: "auto" }}>
+                  <SceneRenderer cut={cut} theme={theme} />
+                </AbsoluteFill>
+              </AbsoluteFill>
+            ) : (
+              <SceneRenderer cut={cut} theme={theme} />
+            )}
           </Sequence>
         );
       })}
