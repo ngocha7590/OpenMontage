@@ -257,7 +257,7 @@ stages:
       - proposal_packet
     produces:
       - publish_log
-    tools_available: [export_bundle]
+    tools_available: [export_bundle, thumbnail_compose, gateway_muse_image, image_selector, upscale]
     checkpoint_required: true
     human_approval_default: true
     review_focus:

@@ -25,7 +25,7 @@ Collect everything needed for metadata:
 
 ### Step 2: Generate SEO Metadata
 
-**Title** (max 60 characters for YouTube):
+**Title** (target 70 characters or fewer, hard limit 100; metadata language follows the brief language):
 - Include the primary keyword from the proposal packet
 - Lead with a hook or number
 - Avoid clickbait but be compelling
@@ -34,7 +34,7 @@ Collect everything needed for metadata:
 **Description** (first 150 chars are critical — shown in search):
 - Opening line: restate the hook with the main value proposition
 - Body: key topics covered, with relevant keywords naturally included
-- Chapters: timestamp markers for each major section (from script sections)
+- Chapters: timestamp markers (first at 0:00, at least 3, each at least 10 s) for each major section (from script sections)
 - Call to action: subscribe/like/follow
 - Links: relevant resources mentioned in the video
 
@@ -47,26 +47,16 @@ Collect everything needed for metadata:
 - 3-5 relevant hashtags
 - Mix trending and niche
 
-### Step 3: Generate Thumbnail Concept
+### Step 3: Generate the thumbnail
 
-Describe a thumbnail that:
-1. Uses the playbook's visual style
-2. Features the video's core concept visually
-3. Includes 3-5 words of text (the hook or key stat)
-4. Has high contrast and is readable at small sizes
-5. Uses the playbook's accent colors for text
+The text is always drawn by code (`thumbnail_compose`). Never ask the image model to render text.
 
-```json
-{
-  "thumbnail": {
-    "concept": "Split screen: left side shows slow SQL query (red X), right shows fast vector search (green check). Large text: '100x FASTER'",
-    "text_overlay": "100x FASTER",
-    "style_notes": "Use playbook accent colors, bold Inter font, dark background"
-  }
-}
-```
-
-*Note: Actual thumbnail generation happens via image_selector if available, otherwise it's a concept for manual creation.*
+1. **Concept**: one strong subject, high contrast, negative space on the headline side, playbook palette. No text, no logos, no real brand or channel names. Keep it as `thumbnail_concept` (`concept`, `text_overlay`, `style_notes`).
+2. **Background**: generate a 16:9 image with the project's image provider (`gateway_muse_image` by default; `image_selector` if the project routes through it). The prompt must say "no text, no letters, no logos" and describe the empty headline side.
+3. **Upscale** with `upscale` if the image is narrower than 1280 px.
+4. **Compose** with `thumbnail_compose`: `background_path`, a 3-6 word `headline` in the brief's language (e.g. Vietnamese), `accent_words`, `palette` `{text, accent, scrim}` from the playbook, `layout` (`left`/`right`/`bottom`/`center`, matching the empty side), `output_path`.
+5. **Look** at the result, also at small size (about 320 px wide). Check the headline is legible and not covering the subject. Regenerate at most once.
+6. **Fallback** if no image provider works: extract a strong frame from the final render with ffmpeg and use it as the background. Record this in the decision log.
 
 ### Step 4: Create Chapter Markers
 
@@ -88,7 +78,7 @@ Each chapter maps to a script section's `start_seconds`.
 Use the `export_bundle` tool (capability `publish`) to do the packaging
 deterministically — pass it the final `video_path` (from `render_report`), the
 `title`, and the metadata you prepared (`description`, `tags`, `hashtags`,
-`chapters`, optional `subtitles_path` and `thumbnail_path`/`thumbnail_concept`).
+`chapters`, optional `subtitles_path`, `thumbnail_path` from Step 3, `thumbnail_concept`, `category_id` (default `"27"`), `default_language` (e.g. `"vi"`)). Visibility defaults to `private`.
 It lays out the export directory, writes the metadata files, and returns a
 schema-valid `publish_log` (`status: "exported"`) in `data["publish_log"]` that
 you persist as the stage artifact.
@@ -104,10 +94,14 @@ exports/
       metadata.json         # All SEO metadata
       chapters.txt          # Chapter markers
       description.txt       # Ready-to-paste description (+ chapters)
+      youtube.json          # videos.insert body: snippet, status, hashtags, chapters, thumbnail, warnings
       tags.txt              # One tag per line
     thumbnails/
-      concept.json          # Thumbnail concept (or the copied thumbnail image)
+      thumbnail.png         # Composed thumbnail (YouTube limit 2 MB)
+      concept.json          # Thumbnail concept
 ```
+
+Before the gate, `data["warnings"]` must be empty or each code explained in the summary (`title_long`, `title_too_long`, `description_too_long`, `tags_too_long`, `angle_brackets`, `chapters_invalid`, `thumbnail_missing`, `thumbnail_too_large`). Fix the cause and re-run where you can.
 
 `export_bundle` is a local, offline packager — it does not upload. A networked
 publisher (e.g. a YouTube uploader) would be a separate `publish`-capability

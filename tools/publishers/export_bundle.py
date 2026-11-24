@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -34,6 +35,10 @@ from tools.base_tool import (
     ToolStatus,
     ToolTier,
 )
+
+
+MIN_CHAPTER_SECONDS = 10
+MAX_THUMB_BYTES = 2 * 1024 * 1024
 
 
 class ExportBundle(BaseTool):
@@ -106,6 +111,9 @@ class ExportBundle(BaseTool):
                 "description": "Target platform label for the publish_log entry. Defaults to 'local'.",
             },
             "visibility": {"type": "string", "enum": ["public", "private", "unlisted"]},
+            "category_id": {"type": "string", "default": "27", "description": "YouTube categoryId (27 = Education)."},
+            "default_language": {"type": "string", "description": "BCP-47 code, e.g. 'vi'."},
+            "made_for_kids": {"type": "boolean", "default": False},
             "timestamp": {
                 "type": "string",
                 "description": "Override the ISO-8601 timestamp (mainly for deterministic tests).",
@@ -118,6 +126,7 @@ class ExportBundle(BaseTool):
             "publish_log": {"type": "object"},
             "export_path": {"type": "string"},
             "files_written": {"type": "array", "items": {"type": "string"}},
+            "warnings": {"type": "array", "items": {"type": "string"}},
         },
     }
 
@@ -139,6 +148,71 @@ class ExportBundle(BaseTool):
         if h:
             return f"{h}:{m:02d}:{s:02d}"
         return f"{m}:{s:02d}"
+
+    @staticmethod
+    def _probe_duration(video_path: Path) -> Optional[float]:
+        try:
+            out = subprocess.run(
+                ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                 "-of", "default=nw=1:nk=1", str(video_path)],
+                capture_output=True, text=True, timeout=30,
+            )
+            return float(out.stdout.strip()) if out.returncode == 0 and out.stdout.strip() else None
+        except Exception:
+            return None
+
+    @staticmethod
+    def _parse_time(value: Any) -> float:
+        if isinstance(value, (int, float)):
+            return float(value)
+        parts = [float(p) for p in str(value).strip().split(":") if p != ""]
+        total = 0.0
+        for p in parts:
+            total = total * 60 + p
+        return total
+
+    def _normalize_chapters(self, chapters: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        out = []
+        for ch in chapters:
+            if "start_seconds" in ch or "time_seconds" in ch:
+                start = float(ch.get("start_seconds", ch.get("time_seconds", 0)))
+            elif "time" in ch:
+                try:
+                    start = self._parse_time(ch["time"])
+                except ValueError:
+                    start = 0.0
+            else:
+                start = 0.0
+            out.append({"start_seconds": start, "title": ch.get("title") or ch.get("label") or ""})
+        out.sort(key=lambda c: c["start_seconds"])
+        return out
+
+    @staticmethod
+    def _merge_short_chapters(chapters: list[dict[str, Any]], duration: Optional[float]) -> list[dict[str, Any]]:
+        """Merge chapters shorter than 10 s into their neighbour (keep the earlier title)."""
+        chs = [dict(c) for c in chapters]
+        changed = True
+        while changed and len(chs) > 1:
+            changed = False
+            for i in range(len(chs)):
+                end = chs[i + 1]["start_seconds"] if i + 1 < len(chs) else duration
+                if end is None or end - chs[i]["start_seconds"] >= MIN_CHAPTER_SECONDS:
+                    continue
+                if i + 1 < len(chs):
+                    if i == 0:  # first chapter must stay at 0: absorb the next one
+                        del chs[1]
+                    else:       # absorb into the previous chapter
+                        del chs[i]
+                else:           # short last chapter folds into the previous one
+                    del chs[i]
+                changed = True
+                break
+        return chs
+
+    @staticmethod
+    def _tags_length(tags: list[str]) -> int:
+        total = sum(len(t) + (2 if " " in t else 0) for t in tags)
+        return total + max(0, len(tags) - 1)
 
     def _chapter_lines(self, chapters: list[dict[str, Any]]) -> list[str]:
         lines: list[str] = []
@@ -201,8 +275,37 @@ class ExportBundle(BaseTool):
         description = inputs.get("description", "")
         tags = inputs.get("tags", []) or []
         hashtags = inputs.get("hashtags", []) or []
-        chapters = inputs.get("chapters", []) or []
+        raw_chapters = inputs.get("chapters", []) or []
+        warnings: list[str] = []
+
+        duration = self._probe_duration(video_path)
+        chapters = self._merge_short_chapters(self._normalize_chapters(raw_chapters), duration) if raw_chapters else []
+        if raw_chapters and (
+            len(chapters) < 3
+            or chapters[0]["start_seconds"] != 0
+            or any(
+                (chapters[i + 1]["start_seconds"] if i + 1 < len(chapters) else (duration or chapters[i]["start_seconds"] + MIN_CHAPTER_SECONDS))
+                - chapters[i]["start_seconds"] < MIN_CHAPTER_SECONDS
+                for i in range(len(chapters))
+            )
+        ):
+            warnings.append("chapters_invalid")
+        if len(chapters) < 3:
+            chapters = []
         chapter_lines = self._chapter_lines(chapters)
+
+        full_description = "\n\n".join(([description] if description else []) + (["\n".join(chapter_lines)] if chapter_lines else []))
+
+        if len(title) > 100:
+            warnings.append("title_too_long")
+        elif len(title) > 70:
+            warnings.append("title_long")
+        if len(full_description) > 5000:
+            warnings.append("description_too_long")
+        if self._tags_length(tags) > 500:
+            warnings.append("tags_too_long")
+        if any(c in title or c in full_description for c in "<>"):
+            warnings.append("angle_brackets")
 
         # metadata.json
         metadata = {
@@ -213,7 +316,7 @@ class ExportBundle(BaseTool):
             "chapters": chapters,
         }
         meta_json = meta_dir / "metadata.json"
-        meta_json.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+        meta_json.write_text(json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8")
         files_written.append(str(meta_json))
 
         # description.txt (description + chapters appended, ready to paste)
@@ -236,17 +339,49 @@ class ExportBundle(BaseTool):
             chapters_txt.write_text("\n".join(chapter_lines) + "\n", encoding="utf-8")
             files_written.append(str(chapters_txt))
 
-        # Thumbnail: real image if given, else concept JSON
+        # Thumbnail: real image if given; concept.json is always written when available
+        thumb_rel: Optional[str] = None
         thumb_in = inputs.get("thumbnail_path")
         if thumb_in and Path(thumb_in).expanduser().is_file():
             thumb_in = Path(thumb_in).expanduser()
             out_thumb = thumb_dir / f"thumbnail{thumb_in.suffix or '.png'}"
             shutil.copy2(thumb_in, out_thumb)
             files_written.append(str(out_thumb))
-        elif inputs.get("thumbnail_concept"):
+            thumb_rel = out_thumb.relative_to(export_root).as_posix()
+            if out_thumb.stat().st_size > MAX_THUMB_BYTES:
+                warnings.append("thumbnail_too_large")
+        else:
+            warnings.append("thumbnail_missing")
+        if inputs.get("thumbnail_concept"):
             concept = thumb_dir / "concept.json"
-            concept.write_text(json.dumps(inputs["thumbnail_concept"], indent=2), encoding="utf-8")
+            concept.write_text(json.dumps(inputs["thumbnail_concept"], indent=2, ensure_ascii=False), encoding="utf-8")
             files_written.append(str(concept))
+
+        # metadata/youtube.json: body of YouTube Data API videos.insert, plus extras
+        category_id = str(inputs.get("category_id") or "27")
+        default_language = inputs.get("default_language")
+        snippet: dict[str, Any] = {
+            "title": title,
+            "description": full_description,
+            "tags": tags,
+            "categoryId": category_id,
+            "defaultLanguage": default_language,
+            "defaultAudioLanguage": default_language,
+        }
+        youtube = {
+            "snippet": snippet,
+            "status": {
+                "privacyStatus": inputs.get("visibility") or "private",
+                "selfDeclaredMadeForKids": bool(inputs.get("made_for_kids", False)),
+            },
+            "hashtags": hashtags,
+            "chapters": chapters,
+            "thumbnail": thumb_rel,
+            "warnings": warnings,
+        }
+        yt_json = meta_dir / "youtube.json"
+        yt_json.write_text(json.dumps(youtube, indent=2, ensure_ascii=False), encoding="utf-8")
+        files_written.append(str(yt_json))
 
         timestamp = inputs.get("timestamp") or datetime.now(timezone.utc).isoformat()
         entry: dict[str, Any] = {
@@ -259,10 +394,13 @@ class ExportBundle(BaseTool):
                 "description": description,
                 "hashtags": hashtags,
                 "chapters": chapters,
+                "tags": tags,
+                "thumbnail_path": thumb_rel,
+                "category_id": category_id,
+                "default_language": default_language,
             },
         }
-        if inputs.get("visibility"):
-            entry["visibility"] = inputs["visibility"]
+        entry["visibility"] = inputs.get("visibility") or "private"
 
         publish_log = {"version": "1.0", "entries": [entry]}
 
@@ -280,6 +418,7 @@ class ExportBundle(BaseTool):
                 "publish_log": publish_log,
                 "export_path": str(export_root),
                 "files_written": files_written,
+                "warnings": warnings,
             },
             artifacts=[str(out_video)],
         )
