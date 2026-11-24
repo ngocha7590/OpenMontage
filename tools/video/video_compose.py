@@ -1787,6 +1787,7 @@ class VideoCompose(BaseTool):
                 script_text=inputs.get("script_text") or self._read_text_file(
                     inputs.get("script_path")
                 ),
+                subtitles_burned=(render_result.data or {}).get("captions_burned"),
             )
 
             # Attach final_review to the ToolResult data so the compose-director
@@ -2001,6 +2002,34 @@ class VideoCompose(BaseTool):
 
         return render_result
 
+    @staticmethod
+    def _captions_from_subtitles(
+        composition_data: dict[str, Any], output_path: Path
+    ) -> list[dict]:
+        """Word captions built from ``subtitles.source`` (SRT), or ``[]``.
+
+        Relative sources are tried from the cwd, the project dir (parent of
+        ``renders/``) and the output dir.
+        """
+        subs = composition_data.get("subtitles") or {}
+        if not subs.get("enabled") or not subs.get("source"):
+            return []
+        src = Path(str(subs["source"]))
+        candidates = (
+            [src]
+            if src.is_absolute()
+            else [Path.cwd() / src, output_path.parent.parent / src, output_path.parent / src]
+        )
+        path = next((c for c in candidates if c.is_file()), None)
+        if path is None or path.suffix.lower() != ".srt":
+            return []
+        from tools.video.remotion_caption_burn import RemotionCaptionBurn
+
+        try:
+            return RemotionCaptionBurn()._srt_to_word_captions(str(path))
+        except Exception:
+            return []
+
     def _remotion_render(self, inputs: dict[str, Any]) -> ToolResult:
         """Render via Remotion (requires Node.js + npx).
 
@@ -2064,6 +2093,25 @@ class VideoCompose(BaseTool):
         # Caption look: CaptionOverlay props from edit_decisions, passed through as-is.
         if isinstance((composition_data.get("subtitles") or {}).get("caption_props"), dict):
             props["captionProps"] = composition_data["subtitles"]["caption_props"]
+
+        # Burned-in captions: the Explainer draws CaptionOverlay only from
+        # props["captions"]. When the edit only points at an SRT
+        # (edit_decisions.subtitles.source), build word captions from it so
+        # enabled subtitles are never silently dropped from the render.
+        captions_burned = bool(props.get("captions"))
+        if not captions_burned and composition_id == "Explainer":
+            built = self._captions_from_subtitles(composition_data, output_path)
+            if built:
+                props["captions"] = built
+                captions_burned = True
+                subs = composition_data.get("subtitles") or {}
+                style = dict(props.get("captionStyle") or {})
+                if isinstance(subs.get("font_size"), (int, float)):
+                    style.setdefault("fontSize", int(subs["font_size"]))
+                if isinstance(subs.get("max_words_per_line"), int):
+                    style.setdefault("wordsPerPage", subs["max_words_per_line"])
+                if style:
+                    props["captionStyle"] = style
 
         if composition_id == "CinematicRenderer":
             if not props.get("scenes") and props.get("cuts"):
@@ -2212,6 +2260,7 @@ class VideoCompose(BaseTool):
                 "output": str(output_path),
                 "profile": profile_name,
                 "staged_media_count": staged_count,
+                "captions_burned": captions_burned,
             },
             artifacts=[str(output_path)],
         )
@@ -2374,8 +2423,13 @@ class VideoCompose(BaseTool):
         proposal_packet: dict[str, Any] | None = None,
         narration_transcript_path: str | Path | None = None,
         script_text: str | None = None,
+        subtitles_burned: bool | None = None,
     ) -> dict[str, Any]:
         """Run post-render self-review and produce a final_review artifact.
+
+        ``subtitles_burned``: whether the renderer actually drew captions into
+        the frames (Remotion path reports it). ``None`` = unknown (FFmpeg
+        paths), which keeps the older "source file exists" assumption.
 
         This is the governance contract: the compose runtime MUST inspect
         the actual rendered output before marking the stage complete.
@@ -2705,6 +2759,17 @@ class VideoCompose(BaseTool):
                     # If subtitles were expected but not found as a stream,
                     # they may be burned in (which is fine — not a failure)
                     if (subtitle_check["subtitles_expected"]
+                            and not subtitle_check["subtitles_present"]
+                            and subtitles_burned is not None):
+                        if subtitles_burned:
+                            subtitle_check["subtitles_present"] = True
+                            subtitle_check["coverage_ratio"] = 1.0
+                        else:
+                            subtitle_check["issues"].append(
+                                "Subtitles enabled but the render contains no "
+                                "subtitle stream and no burned-in captions"
+                            )
+                    elif (subtitle_check["subtitles_expected"]
                             and not subtitle_check["subtitles_present"]):
                         # Check if subtitle_path was used (burned in)
                         sub_source = ed_subs.get("source")
