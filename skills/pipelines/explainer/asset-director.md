@@ -129,6 +129,11 @@ Process asset tasks grouped by tool for efficiency:
 3. Include consistency anchors (same character/world/palette family), but do NOT reuse the exact same phrasing for every image
 4. Generate and verify the file exists
 5. If the result doesn't match expectations, refine the prompt and regenerate (max 2 retries)
+6. **Upscale small stills.** Generated stills are often far below delivery size (muse gateway returns ~498x280). Any image whose short side is below the delivery height (e.g. < 1080 for 1080p) must go through the `upscale` tool (Real-ESRGAN) before composing:
+   - model `RealESRGAN_x4plus_anime_6B` for flat illustration / vector-style / diagram-like art (crisper edges, ~3x faster); `RealESRGAN_x4plus` only for photographic stills
+   - `scale` 4 (use 2 only when the source short side x 2 already reaches delivery height)
+   - write the result as a new file (e.g. `<name>_x4.png`); the manifest `path` points to the upscaled file and records the original size (`original_size`, `upscaled_from`)
+   - if `upscale` is UNAVAILABLE, log that in the decision log and flag the low resolution; never substitute plain ffmpeg/CSS scaling and call it fixed
 
 **Diagrams (`diagram_gen`)**:
 1. Convert the scene description into valid Mermaid syntax
@@ -230,6 +235,7 @@ Assemble all generated assets into the manifest:
 - [ ] Narration assets record `voice_performance.delivery_cues_applied`
 - [ ] Approved TTS sample uses the same provider, voice, and expressive settings as the batch
 - [ ] Images match the playbook's style (review consistency anchors)
+- [ ] No still has short side below delivery height unless upscaled via `upscale` (manifest records original size) or the gap is logged in the decision log
 - [ ] Diagrams are legible and complete
 - [ ] Total cost within budget
 
