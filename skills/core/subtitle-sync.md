@@ -41,6 +41,8 @@ formatting, and readability for both vertical and horizontal video.
 
 ## Styling for Burn-in (ASS force_style)
 
+**Caption size:** burned captions must be at least 4.2% of the short side (about 45 px at 1080p; default 48) with a high-contrast outline or background. The renderers clamp smaller values.
+
 When burning subtitles via `video_compose`, these parameters are passed as ASS
 `force_style`. Use the correct ASS color format: `&HAABBGGRR` (not hex RGB).
 

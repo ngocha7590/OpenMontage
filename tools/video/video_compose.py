@@ -42,6 +42,8 @@ from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import unquote, urlsplit
 
+from lib.caption_size import clamp_ass_font_size, probe_video_size
+
 from tools.base_tool import (
     BaseTool,
     Determinism,
@@ -731,7 +733,8 @@ class VideoCompose(BaseTool):
 
             if subtitle_path and Path(subtitle_path).exists():
                 style = inputs.get("subtitle_style", {})
-                ass_style = self._build_subtitle_style(style)
+                vw, vh = probe_video_size(final_input)
+                ass_style = self._build_subtitle_style(style, vw, vh)
                 sub_escaped = str(Path(subtitle_path).resolve()).replace("\\", "/").replace(":", "\\:")
                 vfilters.append(f"subtitles='{sub_escaped}':force_style='{ass_style}'")
 
@@ -2911,7 +2914,8 @@ class VideoCompose(BaseTool):
             return ToolResult(success=False, error=f"Subtitle file not found: {subtitle_path}")
 
         style = inputs.get("subtitle_style", {})
-        ass_style = self._build_subtitle_style(style)
+        vw, vh = probe_video_size(input_path)
+        ass_style = self._build_subtitle_style(style, vw, vh)
         sub_escaped = str(subtitle_path.resolve()).replace("\\", "/").replace(":", "\\:")
         codec = inputs.get("codec", "libx264")
         crf = inputs.get("crf", 23)
@@ -3108,8 +3112,13 @@ class VideoCompose(BaseTool):
         return resolved
 
     @staticmethod
-    def _build_subtitle_style(style: dict) -> str:
-        """Build ASS force_style string from style dict."""
+    def _build_subtitle_style(
+        style: dict, width: int = 1920, height: int = 1080
+    ) -> str:
+        """Build ASS force_style string from style dict.
+
+        FontSize is clamped to 4.2% of the short side (ASS units, PlayResY=288).
+        """
 
         def _safe(val: Any) -> str:
             # Every value below ends up inside -vf "...force_style='...'". Drop the
@@ -3118,7 +3127,9 @@ class VideoCompose(BaseTool):
 
         parts = []
         parts.append(f"FontName={_safe(style.get('font', 'Inter'))}")
-        parts.append(f"FontSize={_safe(style.get('font_size', 28))}")
+        parts.append(
+            f"FontSize={clamp_ass_font_size(style.get('font_size', 28), width, height)}"
+        )
         parts.append(f"Bold={1 if style.get('bold', True) else 0}")
         if style.get("primary_color"):
             parts.append(f"PrimaryColour={_safe(style['primary_color'])}")

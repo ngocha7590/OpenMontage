@@ -100,7 +100,19 @@ const PageRenderer: React.FC<{
   look: CaptionProps;
 }> = ({ page, fontSize, color, highlightColor, backgroundColor, fontFamily, wordSeparator, direction, bottomOffset, look }) => {
   const frame = useCurrentFrame();
-  const { fps } = useVideoConfig();
+  const { fps, width, height } = useVideoConfig();
+  // Burned captions must stay readable: floor at 4.2% of the short side
+  // (45px at 1080p). Larger values pass through, including textStyle overrides.
+  const minFontSize = Math.round(0.042 * Math.min(width, height));
+  const effectiveFontSize = Math.max(fontSize, minFontSize);
+  const textStyle = look.textStyle
+    ? {
+        ...look.textStyle,
+        ...(typeof look.textStyle.fontSize === "number"
+          ? { fontSize: Math.max(look.textStyle.fontSize, minFontSize) }
+          : {}),
+      }
+    : undefined;
 
   const currentMs = page.startMs + (frame / fps) * 1000;
 
@@ -135,12 +147,12 @@ const PageRenderer: React.FC<{
       >
         <span
           style={{
-            fontSize,
+            fontSize: effectiveFontSize,
             fontWeight: 700,
             fontFamily,
             lineHeight: 1.4,
             whiteSpace: "pre-wrap",
-            ...look.textStyle,
+            ...textStyle,
           }}
         >
           {page.words.map((w, i) => {

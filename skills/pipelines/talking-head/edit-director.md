@@ -49,6 +49,7 @@ For talking-head, the primary cut is usually the full footage (or trimmed segmen
 - Enable subtitles with playbook-compatible styling
 - Reference the subtitle asset from the manifest
 - Set position (usually bottom-center)
+- Size: burned captions must be at least 4.2% of the short side (about 45 px at 1080p; default 48), with a high-contrast outline or background.
 
 ### Step 4: Configure Audio
 

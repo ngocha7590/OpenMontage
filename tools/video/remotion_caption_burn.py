@@ -40,6 +40,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from lib.caption_size import clamp_ass_font_size, clamp_caption_px, probe_video_size
 from lib.paths import REPO_ROOT
 from tools.base_tool import (
     BaseTool,
@@ -479,6 +480,7 @@ class RemotionCaptionBurn(BaseTool):
         dim_parts = dim_result.stdout.strip().split("x")
         width = int(dim_parts[0])
         height = int(dim_parts[1])
+        font_size = clamp_caption_px(font_size, width, height)
 
         # Copy video to Remotion public folder
         pub_dir = root / "public" / "talking-head"
@@ -588,12 +590,14 @@ class RemotionCaptionBurn(BaseTool):
             # Escape path for FFmpeg subtitles filter (Windows colon issue)
             srt_escaped = str(tmp_srt).replace("\\", "/").replace(":", "\\:")
 
+            vw, vh = probe_video_size(input_path)
+            ass_size = clamp_ass_font_size(24, vw, vh)
             cmd = [
                 "ffmpeg", "-y",
                 "-i", input_path,
                 "-vf", (
                     f"subtitles='{srt_escaped}'"
-                    ":force_style='FontName=Segoe UI,FontSize=24,Bold=1,"
+                    f":force_style='FontName=Segoe UI,FontSize={ass_size},Bold=1,"
                     "PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,"
                     "Outline=3,Shadow=2,Alignment=2,MarginV=100'"
                 ),

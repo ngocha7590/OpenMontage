@@ -22,7 +22,7 @@ The viewer should understand the story before support overlays are added. If the
 
 Typical order:
 
-1. subtitles,
+1. subtitles (burned captions must be at least 4.2% of the short side (about 45 px at 1080p; default 48), with a high-contrast outline or background.),
 2. speaker or context labels,
 3. diagrams or stat cards,
 4. optional inserts,

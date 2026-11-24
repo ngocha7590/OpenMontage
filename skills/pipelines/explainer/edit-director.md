@@ -62,6 +62,8 @@ Each cut defines what visual is shown and when:
 
 Subtitles are mandatory for all explainer content:
 
+**Caption size:** burned captions must be at least 4.2% of the short side (about 45 px at 1080p; default 48) with a high-contrast outline or background. The renderers clamp smaller values.
+
 ```json
 {
   "subtitles": {

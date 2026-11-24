@@ -21,7 +21,7 @@ Screen demos get worse when over-edited. Build the timeline in this order:
 1. trim or cut dead time,
 2. apply speed changes,
 3. place overlays,
-4. set subtitle behavior,
+4. set subtitle behavior (burned captions must be at least 4.2% of the short side (about 45 px at 1080p; default 48), with a high-contrast outline or background.),
 5. define audio behavior,
 6. capture detailed crop/ramp notes in `edit_decisions.metadata`.
 
