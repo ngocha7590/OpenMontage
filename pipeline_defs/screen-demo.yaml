@@ -234,7 +234,7 @@ stages:
       - brief
     produces:
       - publish_log
-    tools_available: []
+    tools_available: [export_bundle, thumbnail_compose, upscale, image_selector]
     checkpoint_required: true
     human_approval_default: true
     review_focus:

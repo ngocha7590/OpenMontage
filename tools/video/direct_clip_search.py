@@ -178,6 +178,15 @@ class DirectClipSearch(BaseTool):
                     "inspection. Uses ffmpeg, not CLIP."
                 ),
             },
+            "max_file_mb": {
+                "type": "number",
+                "default": 300,
+                "minimum": 0,
+                "description": (
+                    "Skip any clip whose remote size (HEAD content-length) exceeds "
+                    "this many MB. 0 disables the guard."
+                ),
+            },
             "skip_existing": {
                 "type": "boolean",
                 "default": True,
@@ -261,6 +270,7 @@ class DirectClipSearch(BaseTool):
             extract_thumbs = bool(inputs.get("extract_thumbnails", True))
             skip_existing = bool(inputs.get("skip_existing", True))
             timeout_seconds = float(inputs.get("timeout_seconds", 600))
+            max_file_mb = float(inputs.get("max_file_mb", 300))
             deadline = start + timeout_seconds
 
             clips_dir = output_dir / "clips"
@@ -370,6 +380,7 @@ class DirectClipSearch(BaseTool):
                     max_duration=filters_in.get("max_duration"),
                     orientation=filters_in.get("orientation"),
                     min_width=filters_in.get("min_width"),
+                    max_file_mb=max_file_mb,
                 )
 
                 for src in sources:
@@ -434,6 +445,21 @@ class DirectClipSearch(BaseTool):
                             })
                             collected_for_query += 1
                             continue
+
+                        # Size guard (HEAD); unknown size passes.
+                        if max_file_mb > 0 and cand.download_url:
+                            size = _head_size_bytes(cand.download_url)
+                            if size is not None and size > max_file_mb * 1024 * 1024:
+                                errors.append({
+                                    "phase": "download",
+                                    "clip_id": clip_id,
+                                    "source": src.name,
+                                    "error": (
+                                        f"skipped: {size / 1048576:.0f} MB exceeds "
+                                        f"max_file_mb={max_file_mb:g}"
+                                    ),
+                                })
+                                continue
 
                         # Download
                         try:
@@ -549,6 +575,18 @@ class DirectClipSearch(BaseTool):
 # ----------------------------------------------------------------------
 # Helpers
 # ----------------------------------------------------------------------
+
+
+def _head_size_bytes(url: str) -> Optional[int]:
+    """Remote size via HEAD content-length, or None if unavailable."""
+    try:
+        import requests
+
+        r = requests.head(url, allow_redirects=True, timeout=15)
+        n = r.headers.get("Content-Length")
+        return int(n) if n is not None else None
+    except Exception:
+        return None
 
 
 def _guess_ext(cand) -> str:

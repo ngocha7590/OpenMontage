@@ -38,6 +38,10 @@ Store in `publish_log.metadata`:
 - exports are labeled by purpose and platform,
 - the package is usable without extra manual work.
 
+## Thumbnail And YouTube Export
+
+Before packaging, make one thumbnail for the delivered video. Background: a 16:9 image from the project's image provider (`gateway_muse_image` or `image_selector`; prompt says "no text, no letters, no logos", leaves the headline side empty), or a key frame from the final render. `upscale` if narrower than 1280 px. Compose with `thumbnail_compose` (3-6 word headline in the brief's language, `accent_words`, playbook `palette`, `layout` opposite the subject), check it at about 320 px wide, then pass `thumbnail_path`, `category_id` (default `"27"`) and `default_language` to `export_bundle` so `metadata/youtube.json` is written. Text is always drawn by code, never by the image model. Follow Step 3 of `skills/pipelines/explainer/publish-director.md` for the details.
+
 ## Common Pitfalls
 
 - Writing generic metadata that ignores the animation style.

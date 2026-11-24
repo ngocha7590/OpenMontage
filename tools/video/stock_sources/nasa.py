@@ -177,10 +177,12 @@ class NasaSource:
         if not isinstance(file_urls, list) or not file_urls:
             return None
 
+        max_bytes = int(max(0.0, float(getattr(filters, "max_file_mb", 300.0) or 0)) * 1024 * 1024)
         if media_type == "video":
-            download_url = _pick_video_url(file_urls)
+            ordered = _ordered_video_urls(file_urls)
         else:
-            download_url = _pick_image_url(file_urls)
+            ordered = _ordered_image_urls(file_urls)
+        download_url = _first_within_size(ordered, max_bytes)
         if not download_url:
             return None
         # NASA asset URLs sometimes contain unencoded spaces and other
@@ -248,57 +250,93 @@ class NasaSource:
 # ----------------------------------------------------------------------
 
 
-def _pick_video_url(file_urls: list[str]) -> str:
-    """Pick the best video rendition from a NASA asset manifest.
+_VIDEO_PRIORITY = ("large", "medium", "mobile", "small", "orig")
+_IMAGE_PRIORITY = ("large", "medium", "orig")
 
-    NASA file URLs follow a ``<nasa_id>~<tag>.<ext>`` naming convention
-    where tag is one of: ``orig``, ``large``, ``medium``, ``small``,
-    ``preview``, ``thumb``. Preference order (best quality first):
-    orig → large → medium → small. We skip previews and thumbnails.
-    """
-    priority = ("orig", "large", "medium", "small")
+
+def _bucketed(file_urls: list[str], exts: tuple, priority: tuple) -> list[str]:
     buckets: dict[str, list[str]] = {p: [] for p in priority}
     for url in file_urls:
         lower = url.lower()
-        if not lower.endswith((".mp4", ".mov", ".m4v")):
+        if not lower.endswith(exts):
             continue
         for p in priority:
             if f"~{p}." in lower:
                 buckets[p].append(url)
                 break
+    ordered: list[str] = []
     for p in priority:
-        if buckets[p]:
-            return buckets[p][0]
-    # Fallback: any mp4 at all
+        ordered.extend(buckets[p])
+    return ordered
+
+
+def _ordered_video_urls(file_urls: list[str]) -> list[str]:
+    """Video URLs in delivery-size preference order.
+
+    Prefers ``~large``, ``~medium``, ``~mobile`` (then ``~small``) and
+    uses the multi-GB ``~orig`` master only as a last resort. Previews
+    and thumbnails are skipped.
+    """
+    ordered = _bucketed(file_urls, (".mp4", ".mov", ".m4v"), _VIDEO_PRIORITY)
     for url in file_urls:
-        if url.lower().endswith(".mp4"):
-            return url
-    return ""
+        if url.lower().endswith(".mp4") and url not in ordered \
+                and "~preview." not in url.lower() and "~thumb." not in url.lower():
+            ordered.append(url)
+    return ordered
+
+
+def _ordered_image_urls(file_urls: list[str]) -> list[str]:
+    ordered = _bucketed(
+        file_urls, (".jpg", ".jpeg", ".png", ".tif", ".tiff"), _IMAGE_PRIORITY
+    )
+    for url in file_urls:
+        if url.lower().endswith((".jpg", ".jpeg", ".png")) and url not in ordered \
+                and "~thumb." not in url.lower():
+            ordered.append(url)
+    return ordered
+
+
+def _pick_video_url(file_urls: list[str]) -> str:
+    """Best delivery-size video rendition (large > medium > mobile > orig)."""
+    ordered = _ordered_video_urls(file_urls)
+    return ordered[0] if ordered else ""
 
 
 def _pick_image_url(file_urls: list[str]) -> str:
-    """Pick the best image rendition from a NASA asset manifest.
+    """Best image rendition (large > medium > orig)."""
+    ordered = _ordered_image_urls(file_urls)
+    return ordered[0] if ordered else ""
 
-    Same pattern as videos but for .jpg/.png/.tif. Prefer ``orig``,
-    fall back to ``large``. We skip ``thumb`` and ``small`` because
-    they're too low-res for CLIP embedding quality.
+
+def _remote_size(url: str) -> Optional[int]:
+    """HEAD content-length in bytes, or None when unknown."""
+    import requests  # lazy
+
+    try:
+        r = requests.head(_encode_url_path(url), allow_redirects=True, timeout=20)
+        n = r.headers.get("Content-Length")
+        return int(n) if n is not None else None
+    except Exception:
+        return None
+
+
+def _first_within_size(urls: list[str], max_bytes: int) -> str:
+    """First URL whose HEAD size is within ``max_bytes`` (0 = no limit).
+
+    Unknown size is accepted for every rendition except ``~orig``, which
+    is rejected when its size cannot be confirmed.
     """
-    priority = ("orig", "large", "medium")
-    buckets: dict[str, list[str]] = {p: [] for p in priority}
-    for url in file_urls:
-        lower = url.lower()
-        if not lower.endswith((".jpg", ".jpeg", ".png", ".tif", ".tiff")):
-            continue
-        for p in priority:
-            if f"~{p}." in lower:
-                buckets[p].append(url)
-                break
-    for p in priority:
-        if buckets[p]:
-            return buckets[p][0]
-    # Fallback: any jpg/png
-    for url in file_urls:
-        if url.lower().endswith((".jpg", ".jpeg", ".png")):
+    if not urls:
+        return ""
+    if max_bytes <= 0:
+        return urls[0]
+    for url in urls:
+        size = _remote_size(url)
+        if size is None:
+            if "~orig." in url.lower():
+                continue
+            return url
+        if size <= max_bytes:
             return url
     return ""
 

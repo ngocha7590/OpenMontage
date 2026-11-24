@@ -94,6 +94,16 @@ class VideoCompose(BaseTool):
                     "encode: re-encode to a target profile/codec."
                 ),
             },
+            "normalize_loudness": {
+                "type": "boolean",
+                "default": True,
+                "description": (
+                    "compose/render/remotion_render: after rendering, run a two-pass "
+                    "loudnorm on the delivered file (target -16 LUFS integrated, "
+                    "-1.5 dBTP; video copied, audio AAC 192k). Result is in "
+                    "data.loudness. Set false to skip."
+                ),
+            },
             "input_path": {"type": "string"},
             "output_path": {"type": "string"},
             "edit_decisions": {
@@ -254,7 +264,7 @@ class VideoCompose(BaseTool):
         "narration_transcript_path", "playbook", "playbook_name", "scene_plan",
         "quality", "fps", "workspace_path", "public_dir", "strict",
         "strict_check", "skip_contrast", "snapshots",
-        "remotion_browser_executable", "remotion_concurrency",
+        "remotion_browser_executable", "remotion_concurrency", "normalize_loudness",
     ]
     side_effects = ["writes video file to output_path"]
     user_visible_verification = [
@@ -386,8 +396,41 @@ class VideoCompose(BaseTool):
         except Exception as e:
             return ToolResult(success=False, error=str(e))
 
+        if operation in ("compose", "render", "remotion_render"):
+            self._apply_loudness(result, inputs)
+
         result.duration_seconds = round(time.time() - start, 2)
         return result
+
+    def _apply_loudness(self, result: ToolResult, inputs: dict[str, Any]) -> None:
+        """Final two-pass loudnorm on the delivered file, whatever the runtime."""
+        if not result.success or inputs.get("normalize_loudness", True) is False:
+            return
+        data = result.data if isinstance(result.data, dict) else {}
+        out = data.get("output") or inputs.get("output_path") or (
+            result.artifacts[0] if result.artifacts else None
+        )
+        if not out or not Path(out).is_file():
+            return
+        from lib.loudness import normalize_file
+
+        try:
+            report = normalize_file(out)
+        except Exception as exc:  # never fail a render over loudness
+            report = {"applied": False, "error": f"{type(exc).__name__}: {exc}"}
+        if result.data is None:
+            result.data = data
+        result.data["loudness"] = report
+        review = result.data.get("final_review")
+        if isinstance(review, dict):
+            review["loudness"] = report
+            if report.get("applied") and report.get("within_band") is False:
+                review.setdefault("issues_found", []).append(
+                    f"Loudness {report.get('output_i')} LUFS outside -16 +/- 2 band"
+                )
+                if review.get("status") == "pass":
+                    review["status"] = "revise"
+                result.data["final_review_status"] = review["status"]
 
     _IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".tif", ".webp"}
 

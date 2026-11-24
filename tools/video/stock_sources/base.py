@@ -107,6 +107,7 @@ class SearchFilters:
     min_width: Optional[int] = None         # resolution floor in pixels
     per_page: int = 20
     page: int = 1
+    max_file_mb: float = 300.0              # skip renditions larger than this (<=0 disables)
 
 
 @runtime_checkable

@@ -37,6 +37,10 @@ If a language output has pronunciation caveats, timing warnings, or missing lip 
 - supporting text assets are present,
 - warnings and review notes are not lost.
 
+## Thumbnail And YouTube Export
+
+Before packaging, make one thumbnail for the delivered video. Background: prefer a strong, well-lit frame from the source or the final render (extract with ffmpeg; face or key action clear, not mid-blink or mid-transition). AI image generation (`image_selector`) is optional. `upscale` if narrower than 1280 px. Compose with `thumbnail_compose` (3-6 word headline in the brief's language, `accent_words`, playbook `palette`, `layout` opposite the subject), check it at about 320 px wide, then pass `thumbnail_path`, `category_id` (default `"27"`) and `default_language` to `export_bundle` so `metadata/youtube.json` is written. Text is always drawn by code, never by the image model. Follow Step 3 of `skills/pipelines/explainer/publish-director.md` for the details. With several outputs, one thumbnail for the main/final output is enough; pass it to `export_bundle` for that output.
+
 ## Common Pitfalls
 
 - Shipping localized videos without the matching subtitle or transcript files.
