@@ -105,6 +105,19 @@ subtitles, callout text — is written in the brief's `language` (e.g.
 "Pacific"). Proper nouns keep their usual local spelling. Scene
 descriptions and planning notes themselves stay in English.
 
+**Data and maps are never generated images.** Image generators (muse,
+Gemini web, FLUX, …) cannot draw correct numbers, labelled bars, population
+pyramids or accurate maps — they return empty bars, wrong labels or
+distorted coastlines. Any scene whose point is a number or a comparison
+uses a Remotion component with the real values (`stat_card`, `bar_chart`,
+`line_chart`, `pie_chart`, `kpi_grid`, `comparison`, `progress_bar`). Use a
+generated image only for mood or a concrete object (a house, a person, a
+machine), never as the carrier of data. For geography, prefer a
+`stat_card`/`callout` naming the place over a generated map; if a map is
+essential, keep it as a soft background silhouette and never hold it for
+more than one scene. Hold any single still for at most ~8 s; split longer
+narration across several visuals.
+
 **Captions and charts.** When captions are burned in, the Remotion
 Explainer shrinks chart, card and callout scenes above the caption band
 automatically (`captionStyle.reserveSceneSpace`, default on). Do not place
