@@ -25,7 +25,15 @@ Use:
 - `1:1` when speaker plus context both matter,
 - `16:9` when slides, demos, or multi-speaker width are essential.
 
-Vertical conversion uses the `auto_reframe` tool; pick its `strategy` by source type:
+**Horizontal source -> vertical (9:16) output: use `shorts_layout`** (one ffmpeg pass, finished 1080x1920 Shorts frame: big title on top, content box in the middle, burned captions below).
+
+- Give every clip a hook `title` in the brief's language: 3-10 words, no clickbait filler, plus `accent_words` (the 1-2 phrases that carry the hook; multi-word phrases stay on one line).
+- Pass the clip's SRT as `captions_srt`; do not burn captions again later (no second caption pass on these clips).
+- `strategy`: `auto` (default; face-centred window for talking heads, per-shot content bbox otherwise). `bg`: `auto` (solid for near-black graphics, blurred source otherwise).
+- Content box is 1080 x <=760, fixed per clip; zoom is capped so on-screen text/diagrams are never cut. Review a contact sheet and `<output>.layout.json` (zones, per-shot zoom) before moving on.
+- Sources that are **already vertical** skip `shorts_layout`; use them as-is (or `auto_reframe` only to fix the aspect).
+
+Other conversions (square, 4:5, or when no title/captions layout is wanted) use the `auto_reframe` tool; pick its `strategy` by source type:
 
 - Talking heads / people: `face` (face-tracked crop).
 - Graphics, slides, screen recordings, diagrams, wide shots (no faces): `content_aware`. It decides per shot: a crop window centred on the measured content when ALL of it fits the 9:16 window, otherwise `fit_blur` (full source width scaled onto a blurred, darkened copy of itself). `auto` (default) picks `face` if faces exist, else `content_aware`.
