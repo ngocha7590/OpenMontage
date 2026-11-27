@@ -73,6 +73,17 @@ BAR_H = 8
 POP_SCALE = 112                      # % at the peak of the word pop
 POP_MS = 140                         # total pop duration (up 70 + down 70)
 CUE_FADE_MS = 120
+RESEG_MIN_DUR, RESEG_MAX_DUR = 0.8, 4.5   # caption cue length bounds (s)
+RESEG_PAUSE = 0.25                        # word gap that counts as a pause
+RESEG_COMPOUND_GAP = 0.08                 # gap below which two syllables are treated as one compound
+# small hints for the compound / dangling-word heuristics (the timing gap rule does the general work)
+COMPOUND_PAIRS = {("nguyên", "tử"), ("điện", "trường"), ("từ", "trường"), ("khoa", "học"), ("nhà", "khoa"),
+                  ("vật", "chất"), ("phản", "vật"), ("hạt", "nhân"), ("năng", "lượng"), ("vũ", "trụ"),
+                  ("thí", "nghiệm"), ("nhiệt", "độ"), ("gia", "tốc"), ("lực", "hấp"), ("hấp", "dẫn"),
+                  ("trọng", "lực"), ("điện", "tử"), ("proton", "phản")}
+DANGLING_END = {"nhưng", "và", "thì", "là", "của", "các", "những", "một", "này", "để", "nên", "vì", "nếu", "khi",
+                "mà", "với", "trong", "ở", "cho", "như", "hay", "hoặc", "rằng", "có", "không", "rất", "sẽ", "đã"}
+RESEG_FILL_GAP = 0.15                     # gaps shorter than this are closed by extending the previous cue
 UNIT_WORDS = {"tấn", "tạ", "yến", "kg", "g", "gam", "gram", "mg", "km", "m", "cm", "mm", "mét", "triệu", "tỷ", "tỉ",
               "nghìn", "ngàn", "trăm", "chục", "độ", "lần", "năm", "tháng", "ngày", "giờ", "phút", "giây", "kwh",
               "mw", "gw", "kw", "j", "ev", "mev", "gev", "tev", "hz", "đồng", "usd", "đô", "phần", "trăm"}
@@ -533,6 +544,89 @@ def resolve_word_times(cues: list[tuple[float, float, str]], words: list[dict] |
     return [proportional_times(b.split(), t0, t1) for t0, t1, b in cues], {"source": "proportional", **st}
 
 
+def _ends_with(w: str, rx) -> bool:
+    return bool(rx.search(w.rstrip("\"'”’)]}")))
+
+
+def resegment_cues(words: list[tuple[str, float, float]], size: int, measure_factory=None,
+                   max_w: int | None = None, min_dur: float = RESEG_MIN_DUR, max_dur: float = RESEG_MAX_DUR,
+                   pause: float = RESEG_PAUSE) -> list[tuple[float, float, str, list[tuple[float, float]]]]:
+    """Re-cut a word stream [(word, start, end)] into caption cues (text, times, per-word times).
+
+    Dynamic programme over break positions.  A cue must fit <= 2 balanced lines within ``max_w`` and last at
+    most ``max_dur`` (a single word is always allowed).  Costs: every cue 1; a break that is not at punctuation
+    or a pause 2; a break between two syllables spoken < 80 ms apart with no punctuation 8 (compound words);
+    a sentence end swallowed inside a cue 3 (comma / pause inside: 0.5); a cue shorter than ``min_dur`` 5.
+    Cue start / end = first / last word time; gaps < 150 ms are closed by extending the previous cue.
+    """
+    n = len(words)
+    if n == 0:
+        return []
+    mf = measure_factory or (lambda s_: (lambda t, f=_font(s_): f.getlength(t)))
+    measure = mf(size)
+    limit = max_w if max_w is not None else TEXT_W
+    texts = [w for w, _, _ in words]
+
+    def kind(k: int) -> str:
+        """Nature of the boundary after word k (0-based, k < n-1)."""
+        w = texts[k]
+        if _ends_with(w, _PUNCT_BREAK):
+            return "sentence"
+        if _ends_with(w, _SOFT_BREAK):
+            return "soft"
+        gap = words[k + 1][1] - words[k][2]
+        if (_norm_word(w), _norm_word(texts[k + 1])) in COMPOUND_PAIRS:
+            return "compound"
+        if _norm_word(w) in DANGLING_END and gap < pause:
+            return "dangling"
+        if gap >= pause:
+            return "pause"
+        if gap < RESEG_COMPOUND_GAP:
+            return "tight"
+        return "plain"
+
+    kinds = [kind(k) for k in range(n - 1)]
+    brk_cost = {"sentence": 0.0, "soft": 0.5, "pause": 1.0, "plain": 2.0, "compound": 8.0, "tight": 5.0, "dangling": 4.0}
+    in_cost = {"sentence": 3.0, "soft": 0.5, "pause": 0.5, "plain": 0.0, "compound": 0.0, "tight": 0.0, "dangling": 0.0}
+
+    def fits(i: int, j: int) -> bool:
+        seg = texts[i:j]
+        if j - i == 1:
+            return True
+        return len(wrap_balanced(seg, limit, measure)) <= CAPTION_MAX_LINES and \
+            len(_greedy(seg, limit, measure)) <= CAPTION_MAX_LINES
+
+    INF = float("inf")
+    best = [INF] * (n + 1)
+    prev = [0] * (n + 1)
+    best[0] = 0.0
+    for j in range(1, n + 1):
+        for i in range(j - 1, max(-1, j - 20), -1):
+            if best[i] == INF:
+                continue
+            if j - i > 1 and (words[j - 1][2] - words[i][1] > max_dur or not fits(i, j)):
+                break                                   # longer segments only get worse
+            dur = words[j - 1][2] - words[i][1]
+            c = 1.0 + (5.0 if dur < min_dur else 0.0) + sum(in_cost[kinds[k]] for k in range(i, j - 1))
+            if j < n:
+                c += brk_cost[kinds[j - 1]]
+            if best[i] + c < best[j]:
+                best[j], prev[j] = best[i] + c, i
+    cuts, j = [], n
+    while j > 0:
+        cuts.append((prev[j], j))
+        j = prev[j]
+    cuts.reverse()
+    out = []
+    for i, j in cuts:
+        wt = [(a, b) for _, a, b in words[i:j]]
+        out.append([wt[0][0], wt[-1][1], " ".join(texts[i:j]), wt])
+    for a, b in zip(out, out[1:]):
+        if 0 < b[0] - a[1] < RESEG_FILL_GAP:
+            a[1] = b[0]
+    return [tuple(c) for c in out]
+
+
 def _ass_head(size: int, top_y: int, color: str, font_family: str) -> str:
     return (
         "[Script Info]\nScriptType: v4.00+\nPlayResX: 1080\nPlayResY: 1920\nWrapStyle: 2\nScaledBorderAndShadow: yes\n\n"
@@ -745,6 +839,10 @@ class ShortsLayout(BaseTool):
                         "description": "Animated text. none: static title + captions. subtle: staggered title slide-up/fade, "
                                        "word-by-word caption colour (active word gold, numbers gold), 120 ms cue fades. "
                                        "pop: subtle + gold marker bar sweeping under the accent words + active word scale 100>112>100 %."},
+            "resegment": {"type": "boolean", "default": True,
+                          "description": "Re-cut the SRT text into phrase-based caption cues (sentence end > , ; : > pauses; "
+                                         "keeps 2-syllable compounds together; <=2 lines; 0.8-4.5 s) using the word times. "
+                                         "False keeps the SRT cues as given (long ones are still split to fit)."},
             "words_json": {"description": "Word timestamps [{word, start, end}] (clip-relative seconds) or a path to such a JSON "
                                           "file, e.g. from the transcriber. Without it faster-whisper is run on the clip audio; "
                                           "if that is unavailable timing is proportional to character count.",
@@ -765,7 +863,7 @@ class ShortsLayout(BaseTool):
     resume_support = ResumeSupport.FROM_START
     idempotency_key_fields = ["input_path", "title", "accent_words", "captions_srt", "bg", "bg_color", "accent_color",
                               "max_zoom", "title_font_size", "caption_font_size", "caption_highlight_color",
-                              "title_fade", "text_fx", "words_json", "box_max_height", "strategy", "scene_threshold", "content_margin", "crf"]
+                              "title_fade", "text_fx", "resegment", "words_json", "box_max_height", "strategy", "scene_threshold", "content_margin", "crf"]
     side_effects = ["writes the finished clip and <output>.layout.json"]
     user_visible_verification = [
         "Contact sheet the output: title readable, no on-screen text/numbers cut, captions inside 60..1020 and above y=1600",
@@ -870,10 +968,13 @@ class ShortsLayout(BaseTool):
                     title_bars.append({"x0": x0, "x1": x1, "y": y0 + ln["baseline"] + max(8, round(fit["size"] * 0.2))})
         sub_filter = ""
         timing: dict[str, Any] = {"source": "none"}
+        caption_info: dict[str, Any] = {"resegment": False, "cues": 0}
         if inputs.get("captions_srt") or (fx == "pop" and title_bars):
             cues = parse_srt(Path(inputs["captions_srt"]).read_text(encoding="utf-8-sig")) if inputs.get("captions_srt") else []
             word_times = None
-            if fx != "none" and cues:
+            reseg = bool(inputs.get("resegment", True))
+            n_srt = len(cues)
+            if (fx != "none" or reseg) and cues:
                 wj, src_name = inputs.get("words_json"), "words_json"
                 if isinstance(wj, str):
                     wj = json.loads(Path(wj).read_text(encoding="utf-8"))
@@ -881,6 +982,18 @@ class ShortsLayout(BaseTool):
                 if not wj:
                     wj, src_name = whisper_word_times(src, inputs.get("language")), "whisper"
                 word_times, timing = resolve_word_times(cues, wj, src_name)
+                if reseg:
+                    stream = [(w, a, b) for (_, _, body), wts in zip(cues, word_times)
+                              for w, (a, b) in zip(body.split(), wts)]
+                    m_ = lambda t, f=_font(cap_size): f.getlength(t)
+                    extra = math.ceil((POP_SCALE - 100) / 100 * max(m_(w) for w, _, _ in stream)) if fx == "pop" else 0
+                    new = resegment_cues(stream, cap_size, max_w=TEXT_W - extra)
+                    cues = [(c[0], c[1], c[2]) for c in new]
+                    word_times = [c[3] for c in new]
+                if fx == "none":
+                    word_times = None
+            caption_info = {"resegment": reseg and bool(word_times), "cues_in": n_srt, "cues": len(cues),
+                            "timing_source": timing["source"]}
             ass = tmp / "cap.ass"
             ass.write_text(build_ass(cues, cap_size, min_caption_px(OUT_W, OUT_H), lay["caption"]["y"],
                                      inputs.get("caption_highlight_color") or "#FFFFFF", text_fx=fx,
@@ -951,7 +1064,7 @@ class ShortsLayout(BaseTool):
         report = {"source": f"{src_w}x{src_h}", "output": f"{OUT_W}x{OUT_H}", "fps": fps, "strategy": strategy,
                   "bg": bg_mode, "bg_luma": bg_luma, "title": {"size": fit["size"], "lines": [" ".join(w for w, _ in ln) for ln in fit["lines"]],
                                                                   "truncated": fit["truncated"]},
-                  "text_fx": fx, "word_timing": timing, "caption_size": cap_size, "zones": {k: lay[k] for k in ("title", "box", "caption")},
+                  "text_fx": fx, "word_timing": timing, "captions": caption_info, "caption_size": cap_size, "zones": {k: lay[k] for k in ("title", "box", "caption")},
                   "max_zoom": zmax, "shots": shots}
         rp = Path(str(out) + ".layout.json")
         rp.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")

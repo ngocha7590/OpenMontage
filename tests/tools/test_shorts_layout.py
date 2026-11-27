@@ -251,3 +251,63 @@ def test_render_title_lines_spans(tmp_path):
     assert len(tl["lines"]) == len(fit["lines"]) and all(l["path"].exists() for l in tl["lines"])
     spans = [s for l in tl["lines"] for s in l["spans"]]
     assert len(spans) == 1 and 60 <= spans[0][0] < spans[0][1] <= 1020
+
+
+# ------------------------------------------------------------ resegment
+def _stream(spec, step=0.3, gap=0.02):
+    """spec: words, optional (word, gap_before) tuples -> [(word, start, end)]"""
+    out, t = [], 0.0
+    for item in spec:
+        w, g = item if isinstance(item, tuple) else (item, gap)
+        t += g
+        out.append((w, round(t, 3), round(t + step, 3)))
+        t += step
+    return out
+
+
+def _texts(cues):
+    return [c[2] for c in cues]
+
+
+def test_reseg_does_not_split_compound_word():
+    words = _stream("Vì vậy, người ta dùng nguyên tử phản hydro. Nguyên tử này trung hòa về điện nên điện trường không đẩy được nó.".split())
+    cues = sl.resegment_cues(words, 62, measure_factory=lambda s: (lambda t: len(t) * s * 0.55), max_w=700)
+    for a, b in zip(_texts(cues), _texts(cues)[1:]):
+        assert not (a.lower().endswith("nguyên") and b.lower().startswith("tử"))
+    assert any("nguyên tử" in t.lower() for t in _texts(cues))
+
+
+def test_reseg_prefers_sentence_end_over_pause_and_plain():
+    spec = ["Một", "hai", "ba.", "Bốn", "năm", "sáu", ("bảy", 0.3), "tám", "chín."]
+    cues = sl.resegment_cues(_stream(spec), 62, measure_factory=lambda s: (lambda t: len(t) * s * 0.55), max_w=960)
+    assert _texts(cues)[0] == "Một hai ba." or _texts(cues)[0].endswith(".")
+    for t in _texts(cues):
+        assert t.count(".") <= 1 and (t.endswith(".") or t == _texts(cues)[-1])
+
+
+def test_reseg_duration_bounds_and_two_lines():
+    mf = lambda s: (lambda t: len(t) * s * 0.55)
+    words = _stream(["từ%d" % i for i in range(60)], step=0.35, gap=0.12)
+    cues = sl.resegment_cues(words, 62, measure_factory=mf, max_w=900)
+    assert sum(len(c[2].split()) for c in cues) == 60
+    for t0, t1, text, wt in cues[:-1]:
+        assert sl.RESEG_MIN_DUR <= t1 - t0 <= sl.RESEG_MAX_DUR + 0.2
+        assert len(sl.wrap_balanced(text.split(), 900, mf(62))) <= 2
+        assert len(wt) == len(text.split())
+
+
+def test_reseg_closes_tiny_gaps_only():
+    spec = ["a", "b.", ("c", 0.1), "d.", ("e", 0.6), "f."]
+    cues = sl.resegment_cues(_stream(spec, step=0.5), 62, measure_factory=lambda s: (lambda t: len(t) * 2), max_w=10)
+    for a, b in zip(cues, cues[1:]):
+        gap = b[0] - a[1]
+        assert gap == 0 or gap >= sl.RESEG_FILL_GAP
+
+
+def test_resegment_false_keeps_srt_cues():
+    cues = [(0.0, 1.0, "một hai"), (1.0, 2.0, "ba bốn")]
+    ass = sl.build_ass(cues, 62, 45, 1300, measure_factory=measure_factory)      # the resegment=False path
+    ev = _events(ass)
+    assert len(ev) == 2 and "một hai" in ev[0] and "ba bốn" in ev[1]
+    assert "resegment" in sl.ShortsLayout.input_schema["properties"]
+    assert sl.ShortsLayout.input_schema["properties"]["resegment"]["default"] is True
