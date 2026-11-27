@@ -25,7 +25,13 @@ Use:
 - `1:1` when speaker plus context both matter,
 - `16:9` when slides, demos, or multi-speaker width are essential.
 
-OpenMontage does not yet have first-class auto-reframe. If a vertical crop is weak, plan a safer aspect ratio instead of pretending the crop will work.
+Vertical conversion uses the `auto_reframe` tool; pick its `strategy` by source type:
+
+- Talking heads / people: `face` (face-tracked crop).
+- Graphics, slides, screen recordings, diagrams, wide shots (no faces): `content_aware`. It decides per shot: a crop window centred on the measured content when ALL of it fits the 9:16 window, otherwise `fit_blur` (full source width scaled onto a blurred, darkened copy of itself). `auto` (default) picks `face` if faces exist, else `content_aware`.
+- Never centre-crop away on-screen text, numbers, labels or diagrams. Full-width fit over a blurred background is the fallback, not black bars.
+- Captions and hook text go in the free area below (or above) the fitted content, inside the Shorts safe zone (keep ~12 % clear at the top, ~20 % at the bottom for platform UI). With `fit_blur`, pass `fit_y` around 0.35 to lift the content and leave room for captions; `fit_scale` 1.0-1.15 zooms slightly when the source has wide empty margins.
+- The tool writes `<output>.reframe.json` with the per-shot decisions; record it in `scene_plan.metadata.crop_variants` and review a contact sheet of the output before moving on.
 
 ### 2. Plan First-Second Composition
 

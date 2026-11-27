@@ -106,6 +106,7 @@ def test_actual_reframe_matches_independent_display_crop(
             "target_height": height,
             "face_tracking_json": str(faces),
             "smoothing_window": 1,
+            "strategy": "face",
         }
     )
     assert result.success, result.error
@@ -215,6 +216,7 @@ def test_old_version_cache_is_missed_then_new_render_is_reused(tmp_path, monkeyp
             "target_height": 64,
             "face_tracking_json": str(faces),
             "smoothing_window": 1,
+            "strategy": "face",
         }
         old_identity = AutoReframe()
         old_identity.version = "0.1.0"

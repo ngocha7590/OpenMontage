@@ -7,7 +7,13 @@ for smooth, content-aware cropping.
 Primary use: converting talking-head footage shot in landscape to vertical
 format for social media (TikTok, Reels, Shorts).
 
-Approach: MediaPipe/OpenCV face detection → smoothed bounding box trajectory
+Strategies (input ``strategy``): ``face`` (talking heads), ``center``,
+``fit_blur`` (full-width fit over blurred background) and ``content_aware``
+(per-shot content bbox -> centred crop if it fits, else fit_blur; for graphics,
+slides, screen content). ``auto`` = face if faces found, else content_aware.
+See tools/video/_content_reframe.py.
+
+Face approach: MediaPipe/OpenCV face detection → smoothed bounding box trajectory
 → FFmpeg crop filter. No GPU required.
 """
 
@@ -44,7 +50,7 @@ ASPECT_PRESETS = {
 
 class AutoReframe(BaseTool):
     name = "auto_reframe"
-    version = "0.1.1"
+    version = "0.2.0"
     tier = ToolTier.CORE
     capability = "video_post"
     provider = "ffmpeg"
@@ -65,6 +71,8 @@ class AutoReframe(BaseTool):
         "face_tracked_crop",
         "smart_reframe",
         "center_crop",
+        "content_aware_crop",
+        "fit_blur",
     ]
 
     input_schema = {
@@ -109,6 +117,31 @@ class AutoReframe(BaseTool):
                 "default": 5,
                 "description": "Face detection sample rate (only used if no face_tracking_json)",
             },
+            "strategy": {
+                "type": "string",
+                "enum": ["auto", "face", "center", "fit_blur", "content_aware"],
+                "default": "auto",
+                "description": (
+                    "auto: faces found -> face, otherwise content_aware. "
+                    "face: face-tracked crop (talking heads). "
+                    "center: fixed centre crop. "
+                    "fit_blur: whole frame scaled to target width over a blurred, darkened copy of itself. "
+                    "content_aware: per shot, crop window centred on the measured content bbox when it fits "
+                    "the target window, else fit_blur. Use for graphics, slides, screen content, wide shots. "
+                    "Never use center on content with on-screen text/numbers."
+                ),
+            },
+            "fit_scale": {
+                "type": "number", "default": 1.0, "minimum": 1.0, "maximum": 1.3,
+                "description": "fit_blur: 1.0 = full width; 1.0-1.15 = slight zoom for narrow-margin content",
+            },
+            "fit_y": {
+                "type": "number", "default": 0.5, "minimum": 0.0, "maximum": 1.0,
+                "description": "fit_blur: vertical position of the fitted frame in the free space (0 top, 0.5 centred, 1 bottom). "
+                               "Use ~0.35 to leave room for captions below.",
+            },
+            "scene_threshold": {"type": "number", "default": 0.3, "description": "content_aware: ffmpeg scene score for shot cuts"},
+            "content_margin": {"type": "number", "default": 0.025, "description": "content_aware: margin each side of the bbox, fraction of source width"},
             "codec": {"type": "string", "default": "libx264"},
             "crf": {"type": "integer", "default": 18},
         },
@@ -122,12 +155,13 @@ class AutoReframe(BaseTool):
     idempotency_key_fields = [
         "input_path", "target_aspect", "target_width", "target_height",
         "smoothing_window", "face_padding", "face_tracking_json", "sample_fps",
-        "codec", "crf",
+        "codec", "crf", "strategy", "fit_scale", "fit_y", "scene_threshold", "content_margin",
     ]
     side_effects = ["writes reframed video to output_path"]
     user_visible_verification = [
         "Play reframed output — verify face stays centered and framing is smooth",
         "Check that no important content is cropped out",
+        "content_aware/fit_blur: make a contact sheet; no text/numbers cut, no empty frames; read <output>.reframe.json",
     ]
 
     def execute(self, inputs: dict[str, Any]) -> ToolResult:
@@ -160,8 +194,22 @@ class AutoReframe(BaseTool):
                 artifacts=[str(input_path)],
             )
 
-        # Get face tracking data
-        face_data = self._get_face_data(inputs, input_path, src_fps) if needs_crop else []
+        # Choose strategy
+        strategy = inputs.get("strategy") or "auto"
+        width_crop = target_h == src_h and target_w < src_w  # 16:9 -> narrower
+        if strategy not in ("auto", "face", "center", "fit_blur", "content_aware"):
+            return ToolResult(success=False, error=f"Unknown strategy: {strategy}")
+        if strategy in ("fit_blur", "content_aware") and not width_crop:
+            strategy = "center"  # these only make sense when narrowing the frame
+        face_data = []
+        if strategy in ("auto", "face") and needs_crop:
+            face_data = self._get_face_data(inputs, input_path, src_fps)
+        if strategy == "auto":
+            strategy = "face" if face_data else ("content_aware" if width_crop else "center")
+
+        if strategy in ("fit_blur", "content_aware"):
+            return self._execute_content(inputs, input_path, strategy, src_w, src_h, target_w, target_h,
+                                         out_w, out_h, start)
 
         # Compute per-frame crop positions
         if face_data and len(face_data) > 0:
@@ -212,6 +260,7 @@ class AutoReframe(BaseTool):
         return ToolResult(
             success=True,
             data={
+                "strategy": "face" if method == "face_tracked" else "center",
                 "input": str(input_path),
                 "output": str(output_path),
                 "source_resolution": f"{src_w}x{src_h}",
@@ -223,6 +272,70 @@ class AutoReframe(BaseTool):
             artifacts=[str(output_path)],
             duration_seconds=round(elapsed, 2),
         )
+
+    def _execute_content(
+        self, inputs: dict[str, Any], input_path: Path, strategy: str,
+        src_w: int, src_h: int, crop_w: int, crop_h: int, out_w: int, out_h: int, start: float,
+    ) -> ToolResult:
+        from tools.video import _content_reframe as cr
+
+        aspect_name = inputs.get("target_aspect", "portrait")
+        output_path = Path(inputs.get("output_path", str(input_path.with_stem(f"{input_path.stem}_{aspect_name}"))))
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        duration = self._probe_duration(input_path)
+        if duration <= 0:
+            return ToolResult(success=False, error="Could not read video duration")
+
+        if strategy == "content_aware":
+            shots = cr.detect_shots(str(input_path), duration, inputs.get("scene_threshold", cr.SCENE_THRESHOLD))
+            frames, fps = cr.sample_gray_frames(str(input_path), duration)
+            if len(frames) == 0:
+                return ToolResult(success=False, error="Could not decode frames for content analysis")
+            decisions = cr.analyse_shots(frames, fps, shots, duration, src_w, crop_w,
+                                         inputs.get("content_margin", cr.CONTENT_MARGIN))
+        else:
+            decisions = cr.whole_video_decisions(strategy, duration, src_w, crop_w)
+
+        fit_scale = float(inputs.get("fit_scale", 1.0))
+        fit_y = float(inputs.get("fit_y", 0.5))
+        graph = cr.build_filter_graph(decisions, crop_w, crop_h, out_w, out_h, fit_scale, fit_y)
+        cmd = [
+            "ffmpeg", "-y", "-nostdin", "-i", str(input_path),
+            "-filter_complex", graph,
+            "-map", "[vout]", "-map", "0:a?",
+            "-c:v", inputs.get("codec", "libx264"), "-crf", str(inputs.get("crf", 18)), "-preset", "fast",
+            "-c:a", "copy", str(output_path),
+        ]
+        try:
+            self.run_command(cmd, timeout=1800)
+        except Exception as e:
+            return ToolResult(success=False, error=f"FFmpeg render failed: {e}")
+
+        report = {
+            "strategy": strategy, "source": f"{src_w}x{src_h}", "output": f"{out_w}x{out_h}",
+            "window_px": crop_w, "fit_scale": fit_scale, "fit_y": fit_y, "shots": decisions,
+        }
+        report_path = output_path.with_suffix(".reframe.json")
+        report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+        return ToolResult(
+            success=True,
+            data={
+                "input": str(input_path), "output": str(output_path),
+                "source_resolution": f"{src_w}x{src_h}", "crop_resolution": f"{crop_w}x{crop_h}",
+                "output_resolution": f"{out_w}x{out_h}", "method": strategy, "strategy": strategy,
+                "target_aspect": aspect_name, "report": str(report_path), "shots": decisions,
+            },
+            artifacts=[str(output_path), str(report_path)],
+            duration_seconds=round(time.time() - start, 2),
+        )
+
+    def _probe_duration(self, path: Path) -> float:
+        try:
+            r = self.run_command(["ffprobe", "-v", "quiet", "-select_streams", "v:0",
+                                  "-show_entries", "format=duration", "-of", "csv=p=0", str(path)])
+            return float(r.stdout.strip().splitlines()[0])
+        except Exception:
+            return 0.0
 
     def _get_video_info(self, path: Path) -> tuple[int, int, float, float]:
         """Get encoded dimensions, FPS, and sample aspect ratio via ffprobe."""
