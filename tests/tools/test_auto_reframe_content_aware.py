@@ -94,3 +94,30 @@ def test_filter_graph_covers_all_shots():
     g = cr.build_filter_graph(ds, 606, 1080, 1080, 1920, 1.0, 0.5)
     assert "concat=n=2" in g and "crop=606:1080:600:0" in g and "overlay" in g
     assert "trim=start=2.0" in g and "end=2.0" in g
+
+
+def test_zoom_for_wide_bbox():
+    z, wx = cr.zoom_window((0.10, 0.93), SRC_W, cr.CONTENT_MARGIN)
+    assert 1.13 <= z <= 1.2
+    ww = SRC_W / z
+    # bbox + margin stays fully inside the window
+    assert wx <= (0.10 - cr.CONTENT_MARGIN) * SRC_W + 2 and wx + ww >= (0.93 + cr.CONTENT_MARGIN) * SRC_W - 2
+
+
+def test_full_width_bbox_no_zoom():
+    assert cr.zoom_window((0.0, 1.0), SRC_W, cr.CONTENT_MARGIN) == (1.0, 0)
+
+
+def test_zoom_capped_and_clamped():
+    z, wx = cr.zoom_window((0.0, 0.40), SRC_W, 0.02, max_zoom=1.6)
+    assert z == 1.6 and wx == 0
+    z, wx = cr.zoom_window((0.6, 1.0), SRC_W, 0.02, max_zoom=1.6)
+    assert wx + SRC_W / z <= SRC_W + 1
+
+
+def test_decide_shot_fit_blur_records_zoom():
+    samples = [cr.content_bbox_x(frame(0.10, 0.93)) for _ in range(6)]
+    d = cr.decide_shot(samples, list(range(6)), SRC_W, CROP_W)
+    assert d["strategy"] == "fit_blur" and 1.13 <= d["zoom"] <= 1.2 and "window_x" in d
+    full = [cr.content_bbox_x(frame(0.0, 1.0)) for _ in range(6)]
+    assert cr.decide_shot(full, list(range(6)), SRC_W, CROP_W)["zoom"] == 1.0

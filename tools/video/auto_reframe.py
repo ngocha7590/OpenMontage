@@ -141,7 +141,9 @@ class AutoReframe(BaseTool):
                                "Use ~0.35 to leave room for captions below.",
             },
             "scene_threshold": {"type": "number", "default": 0.3, "description": "content_aware: ffmpeg scene score for shot cuts"},
-            "content_margin": {"type": "number", "default": 0.025, "description": "content_aware: margin each side of the bbox, fraction of source width"},
+            "content_margin": {"type": "number", "default": 0.02, "description": "content_aware: margin each side of the bbox, fraction of source width"},
+            "max_zoom": {"type": "number", "default": 1.6, "minimum": 1.0,
+                         "description": "content_aware: max zoom of fit_blur shots onto the content bbox (zoom = 1/(bbox_w+2*margin), clamped 1..max_zoom); content never cut"},
             "codec": {"type": "string", "default": "libx264"},
             "crf": {"type": "integer", "default": 18},
         },
@@ -155,7 +157,7 @@ class AutoReframe(BaseTool):
     idempotency_key_fields = [
         "input_path", "target_aspect", "target_width", "target_height",
         "smoothing_window", "face_padding", "face_tracking_json", "sample_fps",
-        "codec", "crf", "strategy", "fit_scale", "fit_y", "scene_threshold", "content_margin",
+        "codec", "crf", "strategy", "fit_scale", "fit_y", "scene_threshold", "content_margin", "max_zoom",
     ]
     side_effects = ["writes reframed video to output_path"]
     user_visible_verification = [
@@ -292,13 +294,14 @@ class AutoReframe(BaseTool):
             if len(frames) == 0:
                 return ToolResult(success=False, error="Could not decode frames for content analysis")
             decisions = cr.analyse_shots(frames, fps, shots, duration, src_w, crop_w,
-                                         inputs.get("content_margin", cr.CONTENT_MARGIN))
+                                         inputs.get("content_margin", cr.CONTENT_MARGIN),
+                                         float(inputs.get("max_zoom", cr.MAX_ZOOM)))
         else:
             decisions = cr.whole_video_decisions(strategy, duration, src_w, crop_w)
 
         fit_scale = float(inputs.get("fit_scale", 1.0))
         fit_y = float(inputs.get("fit_y", 0.5))
-        graph = cr.build_filter_graph(decisions, crop_w, crop_h, out_w, out_h, fit_scale, fit_y)
+        graph = cr.build_filter_graph(decisions, crop_w, crop_h, out_w, out_h, fit_scale, fit_y, src_w)
         cmd = [
             "ffmpeg", "-y", "-nostdin", "-i", str(input_path),
             "-filter_complex", graph,
@@ -313,7 +316,7 @@ class AutoReframe(BaseTool):
 
         report = {
             "strategy": strategy, "source": f"{src_w}x{src_h}", "output": f"{out_w}x{out_h}",
-            "window_px": crop_w, "fit_scale": fit_scale, "fit_y": fit_y, "shots": decisions,
+            "window_px": crop_w, "fit_scale": fit_scale, "fit_y": fit_y, "max_zoom": inputs.get("max_zoom", cr.MAX_ZOOM), "shots": decisions,
         }
         report_path = output_path.with_suffix(".reframe.json")
         report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")

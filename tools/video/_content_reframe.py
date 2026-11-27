@@ -25,9 +25,10 @@ EDGE_THRESHOLD = 28         # gradient magnitude that counts as content (thin te
 MIN_COL_FRACTION = 0.012    # a column needs this fraction of rows "on" to count
 MIN_CONTENT_COLS = 0.02     # < 2 % of width as content => treat frame as empty
 BBOX_PERCENTILE = 5         # percentile used for left/right edge over samples
-CONTENT_MARGIN = 0.025      # margin (fraction of source width) each side of bbox
+CONTENT_MARGIN = 0.02       # margin (fraction of source width) each side of bbox
 SCENE_THRESHOLD = 0.30      # ffmpeg scene score
 MIN_SHOT_SECONDS = 0.8      # shots shorter than this are merged into neighbours
+MAX_ZOOM = 1.6             # fit_blur zoom cap
 PAN_MIN_TRAVEL = 0.30       # pan only if centre moves > 30 % of window width
 
 
@@ -64,12 +65,33 @@ def shot_bbox(samples: list[tuple[float, float] | None]) -> tuple[float, float] 
     return float(np.percentile(xs0, BBOX_PERCENTILE)), float(np.percentile(xs1, 100 - BBOX_PERCENTILE))
 
 
+def zoom_window(bbox: tuple[float, float] | None, src_w: int, margin: float,
+                max_zoom: float = MAX_ZOOM) -> tuple[float, int]:
+    """fit_blur zoom: window of src_w/zoom px centred on bbox; bbox+margin always inside.
+
+    zoom = clamp(1 / (bbox_w + 2*margin), 1, max_zoom). Returns (zoom, window_x).
+    """
+    if bbox is None:
+        return 1.0, 0
+    bw = bbox[1] - bbox[0] + 2 * margin
+    zoom = float(min(max(1.0 / max(bw, 1e-6), 1.0), max_zoom))
+    ww = src_w / zoom
+    x = (bbox[0] + bbox[1]) / 2 * src_w - ww / 2
+    return round(zoom, 3), int(round(max(0.0, min(x, src_w - ww))))
+
+
+def _fit_fields(bbox_full, src_w, margin, max_zoom) -> dict:
+    z, wx = zoom_window(bbox_full, src_w, margin, max_zoom)
+    return {"zoom": z, "window_x": wx}
+
+
 def decide_shot(
     samples: list[tuple[float, float] | None],
     sample_times: list[float],
     src_w: int,
     crop_w: int,
     margin: float = CONTENT_MARGIN,
+    max_zoom: float = MAX_ZOOM,
 ) -> dict[str, Any]:
     """Decide crop vs fit_blur for one shot.
 
@@ -80,11 +102,14 @@ def decide_shot(
     """
     bb = shot_bbox(samples)
     if bb is None:
-        return {"strategy": "fit_blur", "reason": "no content detected", "bbox": None}
+        return {"strategy": "fit_blur", "reason": "no content detected", "bbox": None, "bbox_full": None,
+                "zoom": 1.0, "window_x": 0}
     x0, x1 = bb[0] * src_w, bb[1] * src_w
     m = margin * src_w
     need = (x1 - x0) + 2 * m
-    info = {"bbox": [round(bb[0], 3), round(bb[1], 3)], "need_px": round(need), "window_px": crop_w}
+    valid = [v for v in samples if v is not None]
+    full = (min(v[0] for v in valid), max(v[1] for v in valid))
+    info = {"bbox": [round(bb[0], 3), round(bb[1], 3)], "bbox_full": [round(full[0], 4), round(full[1], 4)], "need_px": round(need), "window_px": crop_w}
 
     def clamp(x: float) -> int:
         return int(max(0, min(round(x), src_w - crop_w)))
@@ -109,7 +134,8 @@ def decide_shot(
             return {"strategy": "crop", "reason": "content moves, smooth pan", "keyframes": kfs, **info}
     if need <= crop_w:
         return {"strategy": "crop", "reason": "content fits window", "crop_x": clamp((x0 + x1) / 2 - crop_w / 2), **info}
-    return {"strategy": "fit_blur", "reason": "content wider than 9:16 window", **info}
+    return {"strategy": "fit_blur", "reason": "content wider than 9:16 window", **info,
+            **_fit_fields(full, src_w, margin, max_zoom)}
 
 
 # -------------------------------------------------------------- ffmpeg io
@@ -187,10 +213,12 @@ def _split_runs(extents: list, times: list[float], src_w: int, crop_w: int,
 
 
 def analyse_shots(frames: np.ndarray, fps: float, shots: list[tuple[float, float | None]],
-                  duration: float, src_w: int, crop_w: int, margin: float = CONTENT_MARGIN) -> list[dict]:
+                  duration: float, src_w: int, crop_w: int, margin: float = CONTENT_MARGIN,
+                  max_zoom: float = MAX_ZOOM) -> list[dict]:
     extents = [content_bbox_x(f) for f in frames]
     out = []
     for start, end in shots:
+        shot_first = len(out)
         e = duration if end is None else end
         i0 = int(np.ceil(start * fps - 1e-6))
         i1 = max(i0 + 1, int(np.ceil(e * fps - 1e-6)))
@@ -206,24 +234,38 @@ def analyse_shots(frames: np.ndarray, fps: float, shots: list[tuple[float, float
             ri = idx[r0:r1]
             rs = start if r0 == 0 else ri[0] / fps
             re_ = e if r1 == len(idx) else idx[r1] / fps
-            d = decide_shot([extents[i] for i in ri], [i / fps - rs for i in ri], src_w, crop_w, margin)
+            d = decide_shot([extents[i] for i in ri], [i / fps - rs for i in ri], src_w, crop_w, margin, max_zoom)
             d.update({"start": round(rs, 3), "end": round(re_, 3), "samples": len(ri)})
-            if out and d["strategy"] == "fit_blur" and out[-1]["strategy"] == "fit_blur":
-                prev = out[-1]  # adjacent fit_blur shots are visually identical: merge
+            if len(out) > shot_first and d["strategy"] == "fit_blur" and out[-1]["strategy"] == "fit_blur":
+                # adjacent fit_blur runs inside ONE scene shot: merge, zoom on the union bbox
+                prev = out[-1]
                 prev["end"] = d["end"]
                 prev["samples"] += d["samples"]
                 if d.get("bbox") and prev.get("bbox"):
                     prev["bbox"] = [min(prev["bbox"][0], d["bbox"][0]), max(prev["bbox"][1], d["bbox"][1])]
+                    prev["bbox_full"] = [min(prev["bbox_full"][0], d["bbox_full"][0]),
+                                         max(prev["bbox_full"][1], d["bbox_full"][1])]
+                    prev.update(_fit_fields(prev["bbox_full"], src_w, margin, max_zoom))
                 continue
             out.append(d)
     return out
 
 
 # ---------------------------------------------------------- filter building
-def fit_blur_chain(i: int, out_w: int, out_h: int, fit_scale: float, fit_y: float) -> str:
-    """Filter chain (input label [s{i}], output [o{i}]) for a fit_blur shot."""
+def fit_blur_chain(i: int, out_w: int, out_h: int, fit_scale: float, fit_y: float,
+                   src_w: int = 0, zoom: float = 1.0, window_x: int = 0) -> str:
+    """Filter chain (input [s{i}], output [o{i}]) for a fit_blur shot.
+
+    With ``zoom`` > 1 the foreground is the source window [window_x, window_x+src_w/zoom)
+    (full height) scaled to the output width; empty margins are trimmed, nothing else.
+    """
+    pre = ""
+    if zoom > 1.0 and src_w:
+        ww = int(round(src_w / zoom / 2)) * 2
+        pre = f"crop={ww}:ih:{min(window_x, src_w - ww)}:0,"
+        fit_scale = 1.0
     fw = int(round(out_w * fit_scale / 2)) * 2
-    fg = f"scale={fw}:-2:flags=lanczos"
+    fg = f"{pre}scale={fw}:-2:flags=lanczos"
     if fw > out_w:
         fg += f",crop={out_w}:ih:(iw-{out_w})/2:0"
     sw, sh = max(2, out_w // 8 // 2 * 2), max(2, out_h // 8 // 2 * 2)
@@ -251,7 +293,7 @@ def crop_chain(i: int, decision: dict, crop_w: int, crop_h: int, out_w: int, out
 
 
 def build_filter_graph(decisions: list[dict], crop_w: int, crop_h: int, out_w: int, out_h: int,
-                       fit_scale: float, fit_y: float) -> str:
+                       fit_scale: float, fit_y: float, src_w: int = 0) -> str:
     n = len(decisions)
     parts = []
     if n == 1:
@@ -264,7 +306,8 @@ def build_filter_graph(decisions: list[dict], crop_w: int, crop_h: int, out_w: i
         if d["strategy"] == "crop":
             parts.append(crop_chain(i, d, crop_w, crop_h, out_w, out_h))
         else:
-            parts.append(fit_blur_chain(i, out_w, out_h, fit_scale, fit_y))
+            parts.append(fit_blur_chain(i, out_w, out_h, fit_scale, fit_y, src_w,
+                                                 d.get("zoom", 1.0), d.get("window_x", 0)))
     parts.append("".join(f"[o{i}]" for i in range(n)) + f"concat=n={n}:v=1:a=0,setsar=1,format=yuv420p[vout]")
     return ";".join(parts)
 
