@@ -54,6 +54,7 @@ GAP = 40                             # title -> box -> captions
 BOX_MAX_H = 760
 CAPTION_SIZE, CAPTION_MAX_LINES = 62, 2
 CAPTION_LINE_SPACING = 1.3
+CAPTION_FLOOR_TOLERANCE = 1.02
 CAPTION_BOTTOM_LIMIT = 1600          # bottom 300 px belong to Shorts UI
 DEFAULT_ACCENT = "#F5C542"
 DEFAULT_BG = "#0B0D12"
@@ -241,11 +242,15 @@ def wrap_caption(text: str, size: int, min_size: int, max_lines: int = CAPTION_M
     mf = measure_factory or (lambda s: (lambda t, f=_font(s): f.getlength(t)))
     s = size
     while True:
-        measure = mf(s)
-        idx = wrap_balanced(words, max_w, measure)
+        idx = wrap_balanced(words, max_w, mf(s))
         if len(idx) <= max_lines or s <= min_size:
             break
         s = max(s - 2, min_size)
+    if len(idx) > max_lines:
+        # at the floor: tolerate up to +2 % width (<= ~10 px past the safe band) before a 3rd line
+        alt = wrap_balanced(words, max_w * CAPTION_FLOOR_TOLERANCE, mf(s))
+        if len(alt) <= max_lines:
+            idx = alt
     return s, [" ".join(words[j] for j in ln) for ln in idx]
 
 

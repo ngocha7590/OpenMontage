@@ -106,3 +106,15 @@ def test_srt_and_ass(tmp_path):
 def test_caption_max_two_lines_or_shrinks():
     s, lines = sl.wrap_caption("a " * 34, 62, 45, measure_factory=measure_factory)
     assert len(lines) <= 2 and 45 <= s <= 62
+
+
+def test_long_caption_two_lines_with_real_font():
+    text = "Phản vật chất rất khó giữ vì nó biến mất ngay khi chạm vào vật chất thông thường."
+    s, lines = sl.wrap_caption(text, 62, 45)          # real Be Vietnam Pro metrics
+    assert len(lines) == 2 and s == 45                # 2579 px at 62 cannot fit 2x960: shrinks to the floor
+    f = sl._font(s)
+    widths = [f.getlength(ln) for ln in lines]
+    assert max(widths) <= sl.TEXT_W * sl.CAPTION_FLOOR_TOLERANCE
+    # a shorter cue keeps 62 px and uses balanced lines
+    s2, l2 = sl.wrap_caption("Phản vật chất rất khó giữ vì nó biến mất ngay.", 62, 45)
+    assert s2 == 62 and len(l2) == 2
