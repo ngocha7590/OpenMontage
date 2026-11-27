@@ -52,7 +52,7 @@ TITLE_SIZE, TITLE_MIN_SIZE, TITLE_MAX_LINES = 76, 56, 3
 TITLE_LINE_SPACING = 1.16
 GAP = 40                             # title -> box -> captions
 BOX_MAX_H = 760
-CAPTION_SIZE, CAPTION_MAX_LINES = 54, 2
+CAPTION_SIZE, CAPTION_MAX_LINES = 62, 2
 CAPTION_LINE_SPACING = 1.3
 CAPTION_BOTTOM_LIMIT = 1600          # bottom 300 px belong to Shorts UI
 DEFAULT_ACCENT = "#F5C542"
@@ -274,14 +274,14 @@ def build_ass(cues: list[tuple[float, float, str]], size: int, min_size: int, to
 # ----------------------------------------------------------------- layout
 def compute_layout(title_lines: int, title_size: int, caption_size: int, box_max_h: int = BOX_MAX_H,
                    title_top: int = TITLE_TOP, title_spacing: float = TITLE_LINE_SPACING) -> dict[str, Any]:
-    """Zone geometry. box_max_h is reduced when the captions would cross CAPTION_BOTTOM_LIMIT."""
+    """Zone sizes. The stack (title + gap + box + gap + 2-line captions) must fit in title_top..1600;
+    box_max_h is reduced when it would not."""
     title_h = title_lines * line_height(title_size, title_spacing)
-    box_top = title_top + title_h + GAP
     cap_h = int(round(CAPTION_MAX_LINES * caption_size * CAPTION_LINE_SPACING)) + 10  # + outline
-    avail = CAPTION_BOTTOM_LIMIT - cap_h - GAP - box_top
+    avail = CAPTION_BOTTOM_LIMIT - title_top - title_h - cap_h - 2 * GAP
     return {
+        "title_top": title_top,
         "title": {"x": SAFE_X0, "y": title_top, "w": TEXT_W, "h": title_h},
-        "box_top": box_top,
         "box_max_h": max(2, min(box_max_h, avail) // 2 * 2),
         "caption_h": cap_h,
     }
@@ -294,10 +294,16 @@ def box_height(content_heights: list[int], box_max_h: int) -> int:
 
 
 def finish_layout(lay: dict[str, Any], box_h: int) -> dict[str, Any]:
-    box_top = lay["box_top"]
+    """Place the stack: centred vertically in title_top..CAPTION_BOTTOM_LIMIT (2-line caption space reserved)."""
+    title_h, cap_h = lay["title"]["h"], lay["caption_h"]
+    stack = title_h + GAP + box_h + GAP + cap_h
+    offset = max(0, (CAPTION_BOTTOM_LIMIT - lay["title_top"] - stack) // 2)
+    ty = lay["title_top"] + offset
+    box_top = ty + title_h + GAP
     cap_top = box_top + box_h + GAP
-    return {**lay, "box": {"x": 0, "y": box_top, "w": OUT_W, "h": box_h},
-            "caption": {"x": SAFE_X0, "y": cap_top, "w": TEXT_W, "h": lay["caption_h"]}}
+    return {**lay, "title": {**lay["title"], "y": ty}, "box_top": box_top, "stack_h": stack,
+            "box": {"x": 0, "y": box_top, "w": OUT_W, "h": box_h},
+            "caption": {"x": SAFE_X0, "y": cap_top, "w": TEXT_W, "h": cap_h}}
 
 
 def shot_window(bbox_full: list[float] | None, src_w: int, src_h: int, margin: float, zmax: float,
@@ -464,7 +470,6 @@ class ShortsLayout(BaseTool):
         box_h = box_height([s["content_h"] for s in shots], box_max)
         lay = finish_layout(lay, box_h)
         box_top = lay["box_top"]
-
         bg_color = inputs.get("bg_color", DEFAULT_BG)
         bg_mode = inputs.get("bg", "auto")
         bg_luma = background_luma(frames)

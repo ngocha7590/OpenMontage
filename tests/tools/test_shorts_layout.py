@@ -50,11 +50,13 @@ def test_real_font_renders_vietnamese_title(tmp_path):
 
 @pytest.mark.parametrize("lines,size", [(1, 76), (2, 70), (3, 76), (3, 56)])
 def test_layout_zones_do_not_overlap_and_stay_safe(lines, size):
-    lay = sl.compute_layout(lines, size, 54)
+    lay = sl.compute_layout(lines, size, 62)
     for box_h in (500, 608, lay["box_max_h"]):
         f = sl.finish_layout(lay, box_h)
         t, b, c = f["title"], f["box"], f["caption"]
-        assert t["y"] == sl.TITLE_TOP
+        assert t["y"] >= sl.TITLE_TOP
+        top_gap, bot_gap = t["y"] - sl.TITLE_TOP, sl.CAPTION_BOTTOM_LIMIT - (c["y"] + lay["caption_h"])
+        assert abs(top_gap - bot_gap) <= 1  # stack centred in 180..1600
         assert t["y"] + t["h"] + sl.GAP <= b["y"]
         assert b["y"] + b["h"] + sl.GAP <= c["y"]
         assert c["y"] + c["h"] <= sl.CAPTION_BOTTOM_LIMIT
@@ -64,7 +66,7 @@ def test_layout_zones_do_not_overlap_and_stay_safe(lines, size):
 
 
 def test_box_cap_shrinks_when_captions_would_cross_limit():
-    lay = sl.compute_layout(3, 76, 54, box_max_h=1200)
+    lay = sl.compute_layout(3, 76, 62, box_max_h=1200)
     assert lay["box_max_h"] < 1200
     f = sl.finish_layout(lay, lay["box_max_h"])
     assert f["caption"]["y"] + f["caption"]["h"] <= sl.CAPTION_BOTTOM_LIMIT
@@ -95,12 +97,12 @@ def test_shot_window_tall_source_crops_vertically():
 def test_srt_and_ass(tmp_path):
     cues = sl.parse_srt("1\n00:00:00,000 --> 00:00:01,760\nHãy quay lại lúc vũ trụ mới hình\nthành.\n\n2\n00:00:02,300 --> 00:00:02,720\n<i>Khi đó,</i>\n")
     assert len(cues) == 2 and cues[0][2] == "Hãy quay lại lúc vũ trụ mới hình thành." and cues[1][2] == "Khi đó,"
-    ass = sl.build_ass(cues, 54, 45, 1300, "#F5C542", measure_factory=measure_factory)
-    assert "PlayResY: 1920" in ass and ",54," in ass and "Dialogue: 0,0:00:00.00,0:00:01.76" in ass
+    ass = sl.build_ass(cues, 62, 45, 1300, "#F5C542", measure_factory=measure_factory)
+    assert "PlayResY: 1920" in ass and ",62," in ass and "Dialogue: 0,0:00:00.00,0:00:01.76" in ass
     assert "&H0042C5F5" in ass and "\\N" in ass.split("Dialogue")[1]
     assert f",{sl.SAFE_X0},{sl.OUT_W - sl.SAFE_X1},1300," in ass
 
 
 def test_caption_max_two_lines_or_shrinks():
-    s, lines = sl.wrap_caption("a " * 34, 54, 45, measure_factory=measure_factory)
-    assert len(lines) <= 2 and 45 <= s <= 54
+    s, lines = sl.wrap_caption("a " * 34, 62, 45, measure_factory=measure_factory)
+    assert len(lines) <= 2 and 45 <= s <= 62
