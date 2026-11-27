@@ -29,6 +29,7 @@ Use:
 
 - Give every clip a hook `title` in the brief's language: 3-10 words, no clickbait filler, plus `accent_words` (the 1-2 phrases that carry the hook; multi-word phrases stay on one line).
 - Pass the clip's SRT as `captions_srt`; do not burn captions again later (no second caption pass on these clips).
+- `text_fx` (default `"pop"`; `"subtle"` = colour only, `"none"` = static): staggered title slide-up + gold marker bar under the accent words, word-by-word caption highlight (active word gold, numbers gold), 120 ms cue fades. Pass `words_json` (`[{word, start, end}]`, clip-relative seconds) whenever the transcriber produced word timestamps; otherwise the tool runs faster-whisper on the clip audio and aligns it to the SRT, falling back to character-proportional timing (`<output>.layout.json` records `word_timing.source`).
 - `strategy`: `auto` (default; face-centred window for talking heads, per-shot content bbox otherwise). `bg`: `auto` (solid for near-black graphics, blurred source otherwise).
 - Content box is 1080 x <=760, fixed per clip; zoom is capped so on-screen text/diagrams are never cut. Review a contact sheet and `<output>.layout.json` (zones, per-shot zoom) before moving on.
 - Sources that are **already vertical** skip `shorts_layout`; use them as-is (or `auto_reframe` only to fix the aspect).

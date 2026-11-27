@@ -1,5 +1,7 @@
 """Unit tests for shorts_layout geometry/text helpers (no ffmpeg needed)."""
 
+import re
+
 import pytest
 
 from tools.video import shorts_layout as sl
@@ -139,3 +141,113 @@ def test_unsplittable_word_shrinks_not_splits():
 def test_floor_tolerance_only_on_shrink_path():
     s, lines = sl.wrap_caption("Phản vật chất rất khó giữ vì nó biến mất ngay khi chạm vào vật chất thông thường.", 62, 45)
     assert s == 45 and len(lines) == 2
+
+
+# ------------------------------------------------------------ text_fx
+CUES = [(1.0, 3.0, "Có 92 hạt trong 1 tấn nhé")]
+
+
+def _ass(fx, cues=CUES, wt=None, **kw):
+    return sl.build_ass(cues, 62, 45, 1300, "#FFFFFF", measure_factory=measure_factory, text_fx=fx,
+                        word_times=wt, **kw)
+
+
+def _events(ass):
+    return [ln for ln in ass.splitlines() if ln.startswith("Dialogue")]
+
+
+def test_none_is_static_old_output():
+    ass = _ass("none")
+    old = sl.build_ass(CUES, 62, 45, 1300, "#FFFFFF", measure_factory=measure_factory)
+    assert ass == old
+    assert "\\t(" not in ass and "\\fad" not in ass and "\\p1" not in ass
+
+
+def test_word_highlight_times_and_gold_numbers():
+    words = CUES[0][2].split()
+    wt = [[(1.0 + 0.3 * i, 1.0 + 0.3 * (i + 1)) for i in range(len(words))]]
+    ev = _events(_ass("pop", wt=wt))
+    assert len(ev) == 1 and "\\fad(120,120)" in ev[0]
+    gold, white = "&H0042C5F5", "&H00FFFFFF"
+    blocks = re.findall(r"\{([^}]*)\}([^\s{\\]+)", ev[0])
+    by = {w: b for b, w in blocks if not b.startswith("\\fad")}
+    # "Có" (idx 0): gold at 0 ms, white again at 300 ms (the next word starts); pop 100>112>100 over 140 ms
+    assert f"\\1c{white}&\\t(0,1,\\1c{gold}&)\\t(300,301,\\1c{white}&)" in by["Có"]
+    assert "\\t(0,70,\\fscx112\\fscy112)\\t(70,140,\\fscx100\\fscy100)" in by["Có"]
+    # "hạt" (idx 2) is active 600..900 ms
+    assert "\\t(600,601,\\1c" in by["hạt"] and "\\t(900,901,\\1c" in by["hạt"]
+    # numbers and the unit after a number stay gold: no colour tween back to white
+    for w in ("92", "1", "tấn"):
+        assert by[w].startswith(f"\\1c{gold}") and "\\t(" in by[w] and f"\\1c{white}" not in by[w]
+
+
+def test_subtle_has_no_scale_and_pop_has():
+    wt = [[(1.0 + 0.3 * i, 1.0 + 0.3 * (i + 1)) for i in range(7)]]
+    assert "\\fscx" not in _ass("subtle", wt=wt) and "\\fad(120,120)" in _ass("subtle", wt=wt)
+    assert "\\fscx112" in _ass("pop", wt=wt)
+
+
+def test_gold_flags_numbers_and_units():
+    f = sl.gold_flags("Chỉ ≈100 người, 1 tấn và 50 triệu kWh 12% năm 2023 rồi".split())
+    assert f == [False, True, False, True, True, False, True, True, True, True, False, True, False] or \
+        [w for w, g in zip("Chỉ ≈100 người, 1 tấn và 50 triệu kWh 12% năm 2023 rồi".split(), f) if g] == \
+        ["≈100", "1", "tấn", "50", "triệu", "kWh", "12%", "năm", "2023"]
+    assert sl.is_number_token("92") and sl.is_number_token("%") and not sl.is_number_token("hai")
+
+
+def test_proportional_times_by_characters():
+    t = sl.proportional_times(["a", "bbb"], 0.0, 4.0)
+    assert t == [(0.0, 1.0), (1.0, 4.0)]
+
+
+def test_align_words_difflib_mapping_and_gaps():
+    cues = [(0.0, 3.0, "Nó sẽ rơi xuống hay rơi lên"), (3.0, 5.0, "Đo được 92 hạt")]
+    asr = [{"word": w, "start": s, "end": e} for w, s, e in [
+        ("Nó", 0.1, 0.4), ("sẽ", 0.4, 0.7), ("rơi", 0.8, 1.2), ("xuống", 1.2, 1.7), ("hay", 1.8, 2.0),
+        ("rơi", 2.1, 2.4), ("lên", 2.4, 2.9), ("Đo", 3.2, 3.5), ("được", 3.5, 3.9),
+        ("chín", 4.0, 4.2), ("mươi", 4.2, 4.4), ("hai", 4.4, 4.6), ("hạt", 4.6, 4.9)]]
+    times, st = sl.align_words(cues, asr)
+    assert times[0][2] == (0.8, 1.2) and times[0][6] == (2.4, 2.9)       # equal words copied
+    assert times[1][3] == (4.6, 4.9)                                       # after the replaced block
+    assert 4.0 <= times[1][2][0] and times[1][2][1] <= 4.6                 # "92" spans the spoken digits
+    assert st["matched"] > 0.8
+    assert all(a < b for c in times for a, b in c)
+
+
+def test_resolve_falls_back_to_proportional_when_asr_unrelated():
+    cues = [(0.0, 2.0, "một hai ba bốn")]
+    asr = [{"word": "xyz", "start": 0.0, "end": 1.0}]
+    times, rep = sl.resolve_word_times(cues, asr, "whisper")
+    assert rep["source"] == "proportional" and times[0][0][0] == 0.0 and abs(times[0][-1][1] - 2.0) < 1e-6
+    times, rep = sl.resolve_word_times(cues, None, "whisper")
+    assert rep["source"] == "proportional"
+    times, rep = sl.resolve_word_times(cues, [{"word": w, "start": i * .5, "end": i * .5 + .4}
+                                              for i, w in enumerate("một hai ba bốn".split())], "words_json")
+    assert rep["source"] == "words_json"
+
+
+def test_title_bars_only_in_pop():
+    bars = [{"x0": 100, "x1": 400, "y": 380}]
+    pop = _ass("pop", title_bars=bars, duration=10)
+    assert "\\p1" in pop and "\\t(0,400,0.5,\\fscx100)" in pop and "m 0 0 l 300 0" in pop
+    assert "\\p1" not in _ass("subtle", title_bars=bars, duration=10)
+    assert "\\p1" not in _ass("none", title_bars=bars, duration=10)
+
+
+def test_pop_reserves_width_for_scaled_word():
+    mf = lambda size: (lambda t: len(t) * size * 0.55)
+    text = "một hai ba bốn năm sáu bảy tám chín mười mười một mười hai mười ba"
+    ass = sl.build_ass([(0, 4, text)], 62, 45, 1300, measure_factory=mf, text_fx="pop")
+    for ev in _events(ass):
+        body = re.sub(r"\{[^}]*\}", "", ev.split(",,", 1)[1])
+        m = mf(62)
+        for line in body.split("\\N"):
+            assert m(line) + 0.12 * max(m(w) for w in line.split()) <= sl.TEXT_W + 1
+
+
+def test_render_title_lines_spans(tmp_path):
+    fit = sl.fit_title("Cái hộp không có thành giữ hạt phản vật chất", ["hạt phản vật chất"])
+    tl = sl.render_title_lines(fit, tmp_path)
+    assert len(tl["lines"]) == len(fit["lines"]) and all(l["path"].exists() for l in tl["lines"])
+    spans = [s for l in tl["lines"] for s in l["spans"]]
+    assert len(spans) == 1 and 60 <= spans[0][0] < spans[0][1] <= 1020

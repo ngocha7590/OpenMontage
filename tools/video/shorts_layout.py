@@ -23,7 +23,10 @@ without ffmpeg.
 
 from __future__ import annotations
 
+import difflib
+import hashlib
 import json
+import math
 import re
 import tempfile
 import time
@@ -59,6 +62,20 @@ CAPTION_BOTTOM_LIMIT = 1600          # bottom 300 px belong to Shorts UI
 DEFAULT_ACCENT = "#F5C542"
 DEFAULT_BG = "#0B0D12"
 NEAR_BLACK_LUMA = 40
+
+# ---- text effects (text_fx: none | subtle | pop)
+TEXT_FX_LEVELS = ("none", "subtle", "pop")
+TITLE_STAGGER = 0.08                 # s between title lines
+TITLE_SLIDE_PX = 24                  # slide-up distance
+TITLE_ENTER = 0.30                   # slide + fade duration
+BAR_T0, BAR_T1 = 0.45, 0.85          # accent bar sweep (pop)
+BAR_H = 8
+POP_SCALE = 112                      # % at the peak of the word pop
+POP_MS = 140                         # total pop duration (up 70 + down 70)
+CUE_FADE_MS = 120
+UNIT_WORDS = {"tấn", "tạ", "yến", "kg", "g", "gam", "gram", "mg", "km", "m", "cm", "mm", "mét", "triệu", "tỷ", "tỉ",
+              "nghìn", "ngàn", "trăm", "chục", "độ", "lần", "năm", "tháng", "ngày", "giờ", "phút", "giây", "kwh",
+              "mw", "gw", "kw", "j", "ev", "mev", "gev", "tev", "hz", "đồng", "usd", "đô", "phần", "trăm"}
 
 FONT_PATH = Path(__file__).resolve().parents[1] / "publishers" / "fonts" / "BeVietnamPro-ExtraBold.ttf"
 FONT_FAMILY = "Be Vietnam Pro ExtraBold"   # fontconfig/libass family of the bundled file
@@ -203,6 +220,47 @@ def render_title_png(fit: dict, path: Path, accent: str = DEFAULT_ACCENT, spacin
     return h, block_h
 
 
+def render_title_lines(fit: dict, tmp: Path, accent: str = DEFAULT_ACCENT, spacing: float = TITLE_LINE_SPACING,
+                       pad: int = 16) -> dict[str, Any]:
+    """Render each title line to its own 1080-wide transparent PNG (same look as ``render_title_png``).
+
+    Line ``i`` sits at y = title_y - pad + i*lh.  Also returns the accent spans (x0, x1, baseline_y) per line,
+    in the PNG's coordinates, used to place the marker bars.
+    """
+    from PIL import Image, ImageDraw, ImageFilter
+    size = fit["size"]
+    font = _font(size)
+    lh = line_height(size, spacing)
+    h = lh + 2 * pad
+    space = font.getlength(" ")
+    asc, desc = font.getmetrics()
+    lines = []
+    for li, line in enumerate(fit["lines"]):
+        shadow = Image.new("RGBA", (OUT_W, h), (0, 0, 0, 0))
+        img = Image.new("RGBA", (OUT_W, h), (0, 0, 0, 0))
+        sd, d = ImageDraw.Draw(shadow), ImageDraw.Draw(img)
+        widths = [font.getlength(w) for w, _ in line]
+        total = sum(widths) + space * (len(line) - 1)
+        x = (OUT_W - total) / 2
+        y = pad + (lh - (asc + desc)) / 2
+        spans: list[list[float]] = []
+        for k, ((w, acc), ww) in enumerate(zip(line, widths)):
+            sd.text((x, y + 4), w, font=font, fill=(0, 0, 0, 170))
+            d.text((x, y), w, font=font, fill=(*hex_rgb(accent if acc else "#FFFFFF"), 255))
+            if acc:
+                if spans and spans[-1][2] == k - 1:
+                    spans[-1][1], spans[-1][2] = x + ww, k
+                else:
+                    spans.append([x, x + ww, k])
+            x += ww + space
+        out = Image.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(5)), img)
+        path = tmp / f"title_line{li}.png"
+        out.save(path)
+        lines.append({"path": path, "y_off": li * lh - pad, "baseline": y + asc,
+                      "spans": [(a, b) for a, b, _ in spans]})
+    return {"lines": lines, "png_h": h, "line_h": lh}
+
+
 # --------------------------------------------------------------- captions
 _TS = re.compile(r"(\d+):(\d+):(\d+)[,.](\d+)\s*-->\s*(\d+):(\d+):(\d+)[,.](\d+)")
 
@@ -319,10 +377,164 @@ def split_cues(cues: list[tuple[float, float, str]], size: int, measure_factory=
     return out
 
 
-def build_ass(cues: list[tuple[float, float, str]], size: int, min_size: int, top_y: int,
-              color: str = "#FFFFFF", font_family: str = FONT_FAMILY, measure_factory=None) -> str:
-    """ASS with explicit style on a 1080x1920 canvas; cues are top-anchored at ``top_y``."""
-    head = (
+_NUM_RE = re.compile(r"[≈~±<>≥≤+]*\d[\d.,:/\-]*[%‰]?")
+
+
+def _strip_punct(w: str) -> str:
+    return w.strip(".,;:!?…\"'“”‘’()[]{}")
+
+
+def is_number_token(w: str) -> bool:
+    """92, 2023, 50, 3,5, ≈100, 12%, %"""
+    t = _strip_punct(w)
+    return t == "%" or bool(_NUM_RE.fullmatch(t))
+
+
+def gold_flags(words: list[str]) -> list[bool]:
+    """Numbers stay gold for the whole cue; a unit word right after a number (``1 tấn``, ``50 triệu kWh``) too."""
+    flags: list[bool] = []
+    for i, w in enumerate(words):
+        if is_number_token(w):
+            flags.append(True)
+        else:
+            flags.append(bool(i and flags[i - 1] and _norm_word(w) in UNIT_WORDS))
+    return flags
+
+
+def proportional_times(words: list[str], t0: float, t1: float) -> list[tuple[float, float]]:
+    """Contiguous word times inside [t0, t1], proportional to character count."""
+    total = sum(len(w) for w in words) or 1
+    out, acc = [], 0
+    for w in words:
+        a = t0 + (t1 - t0) * acc / total
+        acc += len(w)
+        out.append((a, t0 + (t1 - t0) * acc / total))
+    return out
+
+
+def _fold(w: str) -> str:
+    """Accent/case/punctuation-insensitive key for aligning SRT words with ASR words."""
+    w = unicodedata.normalize("NFD", w.replace("đ", "d").replace("Đ", "D"))
+    w = "".join(c for c in w if unicodedata.category(c) != "Mn")
+    return re.sub(r"[\W_]+", "", w.casefold())
+
+
+def normalize_word_list(words: list[dict]) -> list[dict]:
+    """ASR words -> [{word, start, end}] with multi-token entries split evenly and empties dropped."""
+    out = []
+    for w in words:
+        parts = str(w["word"]).split()
+        if not parts:
+            continue
+        t0, t1 = float(w["start"]), float(w["end"])
+        for k, (a, b) in enumerate(proportional_times(parts, t0, max(t1, t0))):
+            out.append({"word": parts[k], "start": a, "end": b})
+    return out
+
+
+def align_words(cues: list[tuple[float, float, str]], asr: list[dict]) -> tuple[list[list[tuple[float, float]]], dict]:
+    """Per-cue word times for the SRT words, taken from ASR words aligned in sequence (difflib).
+
+    Equal runs copy the ASR times; replaced runs share the ASR span by character count; words with no ASR
+    counterpart are interpolated between timed neighbours (proportional fallback).  Everything is clamped to
+    its cue.  Returns (times per cue, {"matched": ratio, "words": n}).
+    """
+    asr = normalize_word_list(asr)
+    flat = [(ci, w) for ci, (_, _, body) in enumerate(cues) for w in body.split()]
+    a_keys = [_fold(w) for _, w in flat]
+    b_keys = [_fold(w["word"]) for w in asr]
+    times: list[tuple[float, float] | None] = [None] * len(flat)
+    equal = 0
+    sm = difflib.SequenceMatcher(None, a_keys, b_keys, autojunk=False)
+    for tag, i1, i2, j1, j2 in sm.get_opcodes():
+        if tag == "equal":
+            equal += i2 - i1
+            for k in range(i2 - i1):
+                times[i1 + k] = (asr[j1 + k]["start"], asr[j1 + k]["end"])
+        elif tag == "replace":
+            span = proportional_times([w for _, w in flat[i1:i2]], asr[j1]["start"], asr[j2 - 1]["end"])
+            times[i1:i2] = span
+    out: list[list[tuple[float, float]]] = []
+    pos = 0
+    for ci, (t0, t1, body) in enumerate(cues):
+        words = body.split()
+        ts = times[pos:pos + len(words)]
+        pos += len(words)
+        i = 0
+        while i < len(words):                       # interpolate runs of untimed words
+            if ts[i] is not None:
+                i += 1
+                continue
+            j = i
+            while j < len(words) and ts[j] is None:
+                j += 1
+            lo = ts[i - 1][1] if i else t0
+            hi = ts[j][0] if j < len(words) else t1
+            lo, hi = (lo, hi) if hi > lo else (lo, lo + 0.05 * (j - i))
+            ts[i:j] = proportional_times(words[i:j], lo, hi)
+            i = j
+        res, prev = [], t0
+        for a, b in ts:                             # clamp into the cue, keep monotonic
+            a = min(max(a, prev, t0), t1)
+            b = min(max(b, a + 0.02), max(t1, a + 0.02))
+            res.append((a, b))
+            prev = a
+        out.append(res)
+    n = len(flat)
+    return out, {"matched": round(equal / n, 3) if n else 0.0, "words": n}
+
+
+_WHISPER_MODELS: dict[str, Any] = {}
+
+
+def whisper_word_times(media: Path, language: str | None = None, model_size: str = "small",
+                       cache_dir: Path | None = None) -> list[dict] | None:
+    """faster-whisper word timestamps for ``media`` audio (CPU, int8), cached on disk.  None if unavailable."""
+    import subprocess
+    try:
+        st = media.stat()
+        key = hashlib.sha1(f"{media.resolve()}|{st.st_size}|{int(st.st_mtime)}|{model_size}|{language}".encode()).hexdigest()[:20]
+        cdir = cache_dir or Path(tempfile.gettempdir()) / "shorts_layout_words"
+        cdir.mkdir(parents=True, exist_ok=True)
+        cache = cdir / f"{key}.json"
+        if cache.exists():
+            return json.loads(cache.read_text(encoding="utf-8"))
+        from faster_whisper import WhisperModel
+        wav = cdir / f"{key}.wav"
+        subprocess.run(["ffmpeg", "-y", "-nostdin", "-v", "error", "-i", str(media), "-vn", "-ac", "1", "-ar", "16000",
+                        str(wav)], check=True, capture_output=True)
+        model = _WHISPER_MODELS.get(model_size)
+        if model is None:
+            model = _WHISPER_MODELS[model_size] = WhisperModel(model_size, device="cpu", compute_type="int8")
+        segs, _info = model.transcribe(str(wav), word_timestamps=True, language=language, condition_on_previous_text=False)
+        words = [{"word": w.word.strip(), "start": float(w.start), "end": float(w.end)}
+                 for sg in segs for w in (sg.words or []) if w.word.strip()]
+        wav.unlink(missing_ok=True)
+        if not words:
+            return None
+        cache.write_text(json.dumps(words, ensure_ascii=False), encoding="utf-8")
+        return words
+    except Exception:
+        return None
+
+
+def resolve_word_times(cues: list[tuple[float, float, str]], words: list[dict] | None,
+                       source: str) -> tuple[list[list[tuple[float, float]]], dict]:
+    """Word times per cue + report {source, matched, words}.  Falls back to proportional timing when the
+    ASR words barely match the SRT (< 25 % equal words) or are missing."""
+    n = sum(len(b.split()) for _, _, b in cues)
+    if words:
+        times, st = align_words(cues, words)
+        if st["matched"] >= 0.25:
+            return times, {"source": source, **st}
+        st = {**st, "rejected": source}
+    else:
+        st = {"matched": 0.0, "words": n}
+    return [proportional_times(b.split(), t0, t1) for t0, t1, b in cues], {"source": "proportional", **st}
+
+
+def _ass_head(size: int, top_y: int, color: str, font_family: str) -> str:
+    return (
         "[Script Info]\nScriptType: v4.00+\nPlayResX: 1080\nPlayResY: 1920\nWrapStyle: 2\nScaledBorderAndShadow: yes\n\n"
         "[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, "
         "Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
@@ -331,13 +543,97 @@ def build_ass(cues: list[tuple[float, float, str]], size: int, min_size: int, to
         f"0,0,0,0,100,100,0,0,1,5,2,8,{SAFE_X0},{OUT_W - SAFE_X1},{top_y},1\n\n"
         "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
     )
+
+
+def title_bar_events(bars: list[dict], accent: str, end: float) -> list[str]:
+    """Gold marker bars that sweep left->right (BAR_T0..BAR_T1) under the accent words, then stay."""
     ev = []
-    for t0, t1, body in split_cues(cues, size, measure_factory):
-        s, lines = wrap_caption(body, size, min_size, measure_factory=measure_factory)
-        txt = "\\N".join(lines)
-        if s != size:
-            txt = f"{{\\fs{s}}}" + txt
-        ev.append(f"Dialogue: 0,{_ass_time(t0)},{_ass_time(t1)},Cap,,0,0,0,,{txt}")
+    t1 = int(round((BAR_T1 - BAR_T0) * 1000))
+    for b in bars:
+        w = max(2, int(round(b["x1"] - b["x0"])))
+        ev.append(f"Dialogue: 1,{_ass_time(BAR_T0)},{_ass_time(end)},Cap,,0,0,0,,"
+                  f"{{\\an7\\pos({int(round(b['x0']))},{int(round(b['y']))})\\bord0\\shad0\\1c{_ass_color(accent)}&"
+                  f"\\fscx1\\t(0,{t1},0.5,\\fscx100)\\p1}}m 0 0 l {w} 0 l {w} {BAR_H} l 0 {BAR_H}")
+    return ev
+
+
+def build_ass(cues: list[tuple[float, float, str]], size: int, min_size: int, top_y: int,
+              color: str = "#FFFFFF", font_family: str = FONT_FAMILY, measure_factory=None,
+              text_fx: str = "none", word_times: list[list[tuple[float, float]]] | None = None,
+              accent: str = DEFAULT_ACCENT, title_bars: list[dict] | None = None,
+              duration: float = 0.0) -> str:
+    """ASS with explicit style on a 1080x1920 canvas; cues are top-anchored at ``top_y``.
+
+    ``text_fx`` "none": static cues (the original output).  "subtle": per-word colour (active word gold,
+    numbers gold) + 120 ms cue fades.  "pop": the same plus a 100->112->100 % scale pop of the active word.
+    ``word_times`` = per-cue [(start, end)] per word (default: proportional); ``title_bars`` = accent marker
+    bars [{x0, x1, y}] (pop only).
+    """
+    head = _ass_head(size, top_y, color, font_family)
+    ev = []
+    if text_fx not in ("subtle", "pop"):
+        for t0, t1, body in split_cues(cues, size, measure_factory):
+            s, lines = wrap_caption(body, size, min_size, measure_factory=measure_factory)
+            txt = "\\N".join(lines)
+            if s != size:
+                txt = f"{{\\fs{s}}}" + txt
+            ev.append(f"Dialogue: 0,{_ass_time(t0)},{_ass_time(t1)},Cap,,0,0,0,,{txt}")
+        return head + "\n".join(ev) + "\n"
+
+    pop = text_fx == "pop"
+    mf = measure_factory or (lambda s_: (lambda t, f=_font(s_): f.getlength(t)))
+    base_c, gold_c = _ass_color(color) + "&", _ass_color(accent) + "&"
+    for ci, (t0, t1, body) in enumerate(cues):
+        words = body.split()
+        if not words:
+            continue
+        wt = word_times[ci] if word_times else proportional_times(words, t0, t1)
+        m = mf(size)
+        # a word popping to 112 % widens its line by 12 % of its width: reserve that in the wrap limit
+        extra = int(math.ceil((POP_SCALE - 100) / 100 * max(m(w) for w in words))) if pop else 0
+        limit = TEXT_W - extra
+        parts = split_cue(body, size, max_w=limit, measure_factory=measure_factory)
+        flags = gold_flags(words)
+        idx = 0
+        spans = []
+        for k, part in enumerate(parts):
+            n = len(part.split())
+            spans.append((idx, idx + n))
+            idx += n
+        for k, (i0, i1) in enumerate(spans):
+            first, last = wt[i0][0], wt[i1 - 1][1]
+            ev0 = t0 if k == 0 else (wt[i0 - 1][1] + first) / 2
+            ev1 = t1 if k == len(spans) - 1 else (last + wt[i1][0]) / 2
+            ev0 = round(min(ev0, first) if k == 0 else ev0, 2)
+            ev1 = round(max(ev1, ev0 + 0.1), 2)
+            sz, lines = wrap_caption(parts[k], size, min_size, max_w=limit, measure_factory=measure_factory)
+            dur_ms = int((ev1 - ev0) * 1000)
+            fade = min(CUE_FADE_MS, max(dur_ms // 3, 0))
+            out_lines, wi = [], i0
+            for ln in lines:
+                toks = []
+                for w in ln.split():
+                    a = max(0, int(round((wt[wi][0] - ev0) * 1000)))
+                    nxt = wt[wi + 1][0] if wi + 1 < i1 else None
+                    b = int(round(((nxt if nxt is not None else wt[wi][1]) - ev0) * 1000))
+                    b = max(b, a + 2)
+                    if flags[wi]:
+                        tags = f"\\1c{gold_c}"
+                    else:
+                        tags = f"\\1c{base_c}\\t({a},{a + 1},\\1c{gold_c})"
+                        if nxt is not None:
+                            tags += f"\\t({b},{b + 1},\\1c{base_c})"
+                    if pop:
+                        half = POP_MS // 2
+                        tags += (f"\\fscx100\\fscy100\\t({a},{a + half},\\fscx{POP_SCALE}\\fscy{POP_SCALE})"
+                                 f"\\t({a + half},{a + POP_MS},\\fscx100\\fscy100)")
+                    toks.append(f"{{{tags}}}{w}")
+                    wi += 1
+                out_lines.append(" ".join(toks))
+            pre = f"\\fad({fade},{fade})" + (f"\\fs{sz}" if sz != size else "")
+            ev.append(f"Dialogue: 0,{_ass_time(ev0)},{_ass_time(ev1)},Cap,,0,0,0,,{{{pre}}}" + "\\N".join(out_lines))
+    if pop and title_bars:
+        ev += title_bar_events(title_bars, accent, max(duration, BAR_T1 + 0.5))
     return head + "\n".join(ev) + "\n"
 
 
@@ -412,7 +708,7 @@ def background_luma(frames) -> int:
 # ------------------------------------------------------------------- tool
 class ShortsLayout(BaseTool):
     name = "shorts_layout"
-    version = "0.1.0"
+    version = "0.2.0"
     tier = ToolTier.CORE
     capability = "video_post"
     provider = "ffmpeg"
@@ -444,7 +740,15 @@ class ShortsLayout(BaseTool):
             "title_font_size": {"type": "integer", "default": TITLE_SIZE},
             "caption_font_size": {"type": "integer", "default": CAPTION_SIZE},
             "caption_highlight_color": {"type": "string", "description": "Colour of the active caption (default white)"},
-            "title_fade": {"type": "number", "default": 0.3, "description": "Title fade-in seconds (0 = off)"},
+            "title_fade": {"type": "number", "default": 0.3, "description": "Title fade-in seconds (0 = off); used when text_fx is none"},
+            "text_fx": {"type": "string", "enum": list(TEXT_FX_LEVELS), "default": "pop",
+                        "description": "Animated text. none: static title + captions. subtle: staggered title slide-up/fade, "
+                                       "word-by-word caption colour (active word gold, numbers gold), 120 ms cue fades. "
+                                       "pop: subtle + gold marker bar sweeping under the accent words + active word scale 100>112>100 %."},
+            "words_json": {"description": "Word timestamps [{word, start, end}] (clip-relative seconds) or a path to such a JSON "
+                                          "file, e.g. from the transcriber. Without it faster-whisper is run on the clip audio; "
+                                          "if that is unavailable timing is proportional to character count.",
+                           "anyOf": [{"type": "array", "items": {"type": "object"}}, {"type": "string"}]},
             "box_max_height": {"type": "integer", "default": BOX_MAX_H},
             "strategy": {"type": "string", "enum": ["auto", "content_aware", "face"], "default": "auto",
                          "description": "content_aware: per-shot bbox window. face: talking head, window centred on the face. "
@@ -461,7 +765,7 @@ class ShortsLayout(BaseTool):
     resume_support = ResumeSupport.FROM_START
     idempotency_key_fields = ["input_path", "title", "accent_words", "captions_srt", "bg", "bg_color", "accent_color",
                               "max_zoom", "title_font_size", "caption_font_size", "caption_highlight_color",
-                              "title_fade", "box_max_height", "strategy", "scene_threshold", "content_margin", "crf"]
+                              "title_fade", "text_fx", "words_json", "box_max_height", "strategy", "scene_threshold", "content_margin", "crf"]
     side_effects = ["writes the finished clip and <output>.layout.json"]
     user_visible_verification = [
         "Contact sheet the output: title readable, no on-screen text/numbers cut, captions inside 60..1020 and above y=1600",
@@ -547,16 +851,41 @@ class ShortsLayout(BaseTool):
             bg_mode = "solid" if bg_luma < NEAR_BLACK_LUMA else "blur"
 
         # --- assets
+        fx = inputs.get("text_fx", "pop")
+        if fx not in TEXT_FX_LEVELS:
+            return ToolResult(success=False, error=f"text_fx must be one of {TEXT_FX_LEVELS}")
         tmp = Path(tempfile.mkdtemp(prefix="shorts_layout_"))
-        title_png = tmp / "title.png"
-        png_h, _ = render_title_png(fit, title_png, accent)
-        pad = (png_h - lay["title"]["h"]) // 2
+        title_pngs: list[tuple[Path, int]] = []          # (png, absolute y)
+        title_bars: list[dict] = []
+        if fx == "none":
+            title_png = tmp / "title.png"
+            png_h, _ = render_title_png(fit, title_png, accent)
+            title_pngs.append((title_png, lay["title"]["y"] - (png_h - lay["title"]["h"]) // 2))
+        else:
+            tl = render_title_lines(fit, tmp, accent)
+            for ln in tl["lines"]:
+                y0 = lay["title"]["y"] + ln["y_off"]
+                title_pngs.append((ln["path"], y0))
+                for x0, x1 in ln["spans"]:
+                    title_bars.append({"x0": x0, "x1": x1, "y": y0 + ln["baseline"] + max(8, round(fit["size"] * 0.2))})
         sub_filter = ""
-        if inputs.get("captions_srt"):
-            cues = parse_srt(Path(inputs["captions_srt"]).read_text(encoding="utf-8-sig"))
+        timing: dict[str, Any] = {"source": "none"}
+        if inputs.get("captions_srt") or (fx == "pop" and title_bars):
+            cues = parse_srt(Path(inputs["captions_srt"]).read_text(encoding="utf-8-sig")) if inputs.get("captions_srt") else []
+            word_times = None
+            if fx != "none" and cues:
+                wj, src_name = inputs.get("words_json"), "words_json"
+                if isinstance(wj, str):
+                    wj = json.loads(Path(wj).read_text(encoding="utf-8"))
+                    wj = wj.get("words", wj) if isinstance(wj, dict) else wj
+                if not wj:
+                    wj, src_name = whisper_word_times(src, inputs.get("language")), "whisper"
+                word_times, timing = resolve_word_times(cues, wj, src_name)
             ass = tmp / "cap.ass"
             ass.write_text(build_ass(cues, cap_size, min_caption_px(OUT_W, OUT_H), lay["caption"]["y"],
-                                     inputs.get("caption_highlight_color") or "#FFFFFF"), encoding="utf-8")
+                                     inputs.get("caption_highlight_color") or "#FFFFFF", text_fx=fx,
+                                     word_times=word_times, accent=accent, title_bars=title_bars,
+                                     duration=duration), encoding="utf-8")
             esc = lambda p: str(p).replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
             sub_filter = f",subtitles=filename='{esc(ass)}':fontsdir='{esc(FONT_PATH.parent)}'"
 
@@ -572,7 +901,7 @@ class ShortsLayout(BaseTool):
                      f"eq=brightness=-0.45:saturation=0.7,setsar=1,format=yuv420p[v0]")
         else:
             g.append(("[0:v]null[in0]" if n == 1 else f"[0:v]split={n}" + "".join(f"[in{i}]" for i in range(n))))
-            g.append("[2:v]format=yuv420p[v0]")
+            g.append(f"[{1 + len(title_pngs)}:v]format=yuv420p[v0]")
         lift = ""
         if bg_mode != "blur":  # lift the source's blacks to the solid bg colour so the box edge is invisible
             r, gg, bb = (c / 255 for c in hex_rgb(bg_color))
@@ -584,12 +913,26 @@ class ShortsLayout(BaseTool):
                      f"crop={s['win_w']}:{s['win_h']}:{s['win_x']}:{s['win_y']},{lift}"
                      f"scale={OUT_W}:{s['content_h']}:flags=lanczos,setsar=1[s{i}]")
             g.append(f"[v{i}][s{i}]overlay=0:{y}:eof_action=pass:enable='gte(t,{a})*lt(t,{b})'[v{i + 1}]")
-        ti = "format=rgba" + (f",fade=t=in:st=0:d={fade}:alpha=1" if fade > 0 else "")
-        g.append(f"[1:v]{ti}[ti]")
-        g.append(f"[v{n}][ti]overlay=0:{lay['title']['y'] - pad}:format=auto{sub_filter},format=yuv420p[vout]")
+        if fx == "none":
+            ti = "format=rgba" + (f",fade=t=in:st=0:d={fade}:alpha=1" if fade > 0 else "")
+            g.append(f"[1:v]{ti}[ti]")
+            g.append(f"[v{n}][ti]overlay=0:{title_pngs[0][1]}:format=auto{sub_filter},format=yuv420p[vout]")
+        else:
+            prev = f"v{n}"
+            for li, (_, ty) in enumerate(title_pngs):
+                st = round(li * TITLE_STAGGER, 3)
+                g.append(f"[{1 + li}:v]format=rgba,fade=t=in:st={st}:d={TITLE_ENTER}:alpha=1[tl{li}]")
+                # cubic ease-out slide up TITLE_SLIDE_PX over TITLE_ENTER
+                yexp = f"{ty}+{TITLE_SLIDE_PX}*pow(1-clip((t-{st})/{TITLE_ENTER},0,1),3)"
+                last = li == len(title_pngs) - 1
+                g.append(f"[{prev}][tl{li}]overlay=x=0:y='{yexp}':eval=frame:format=auto"
+                         + (f"{sub_filter},format=yuv420p[vout]" if last else f"[o{li}]"))
+                prev = f"o{li}"
 
         cmd = ["ffmpeg", "-y", "-nostdin", "-i", str(src),
-               "-loop", "1", "-framerate", f"{fps}", "-t", f"{duration}", "-i", str(title_png)]
+               ]
+        for png, _ in title_pngs:
+            cmd += ["-loop", "1", "-framerate", f"{fps}", "-t", f"{duration}", "-i", str(png)]
         if bg_mode != "blur":
             cmd += ["-f", "lavfi", "-i", f"color=c={bg_color.replace('#', '0x')}:s={OUT_W}x{OUT_H}:r={fps}:d={duration}"]
         cmd += ["-filter_complex", ";".join(g), "-map", "[vout]"]
@@ -608,7 +951,7 @@ class ShortsLayout(BaseTool):
         report = {"source": f"{src_w}x{src_h}", "output": f"{OUT_W}x{OUT_H}", "fps": fps, "strategy": strategy,
                   "bg": bg_mode, "bg_luma": bg_luma, "title": {"size": fit["size"], "lines": [" ".join(w for w, _ in ln) for ln in fit["lines"]],
                                                                   "truncated": fit["truncated"]},
-                  "caption_size": cap_size, "zones": {k: lay[k] for k in ("title", "box", "caption")},
+                  "text_fx": fx, "word_timing": timing, "caption_size": cap_size, "zones": {k: lay[k] for k in ("title", "box", "caption")},
                   "max_zoom": zmax, "shots": shots}
         rp = Path(str(out) + ".layout.json")
         rp.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
