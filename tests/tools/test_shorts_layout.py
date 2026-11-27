@@ -108,13 +108,34 @@ def test_caption_max_two_lines_or_shrinks():
     assert len(lines) <= 2 and 45 <= s <= 62
 
 
-def test_long_caption_two_lines_with_real_font():
+def test_long_cue_splits_into_subcues_that_keep_62px():
     text = "Phản vật chất rất khó giữ vì nó biến mất ngay khi chạm vào vật chất thông thường."
-    s, lines = sl.wrap_caption(text, 62, 45)          # real Be Vietnam Pro metrics
-    assert len(lines) == 2 and s == 45                # 2579 px at 62 cannot fit 2x960: shrinks to the floor
-    f = sl._font(s)
-    widths = [f.getlength(ln) for ln in lines]
-    assert max(widths) <= sl.TEXT_W * sl.CAPTION_FLOOR_TOLERANCE
-    # a shorter cue keeps 62 px and uses balanced lines
-    s2, l2 = sl.wrap_caption("Phản vật chất rất khó giữ vì nó biến mất ngay.", 62, 45)
-    assert s2 == 62 and len(l2) == 2
+    cues = sl.split_cues([(2.0, 12.0, text)], 62)           # real Be Vietnam Pro metrics
+    assert len(cues) == 2
+    assert cues[0][0] == 2.0 and cues[-1][1] == 12.0 and cues[0][1] == cues[1][0]   # contiguous, same span
+    assert " ".join(c[2] for c in cues) == text
+    for _, _, body in cues:
+        s, lines = sl.wrap_caption(body, 62, 45)
+        assert s == 62 and len(lines) <= 2
+    # time proportional to characters
+    n0, n1 = len(cues[0][2]), len(cues[1][2])
+    assert abs((cues[0][1] - cues[0][0]) / 10 - n0 / (n0 + n1)) < 1e-6
+
+
+def test_split_prefers_punctuation():
+    text = "Khi một hạt mang điện bay trong từ trường, nó không bay thẳng được mà luôn uốn cong."
+    parts = sl.split_cue(text, 62)
+    assert parts[0].endswith(",")
+    assert sl.split_cue("Ngắn thôi.", 62) == ["Ngắn thôi."]
+
+
+def test_unsplittable_word_shrinks_not_splits():
+    huge = "Điệnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn"
+    assert sl.split_cue(huge, 62) == [huge]
+    s, lines = sl.wrap_caption(huge, 62, 45)
+    assert s == 45 and len(lines) == 1
+
+
+def test_floor_tolerance_only_on_shrink_path():
+    s, lines = sl.wrap_caption("Phản vật chất rất khó giữ vì nó biến mất ngay khi chạm vào vật chất thông thường.", 62, 45)
+    assert s == 45 and len(lines) == 2

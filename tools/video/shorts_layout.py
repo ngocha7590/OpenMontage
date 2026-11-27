@@ -242,8 +242,9 @@ def wrap_caption(text: str, size: int, min_size: int, max_lines: int = CAPTION_M
     mf = measure_factory or (lambda s: (lambda t, f=_font(s): f.getlength(t)))
     s = size
     while True:
-        idx = wrap_balanced(words, max_w, mf(s))
-        if len(idx) <= max_lines or s <= min_size:
+        m = mf(s)
+        idx = wrap_balanced(words, max_w, m)
+        if (len(idx) <= max_lines and all(m(" ".join(words[j] for j in ln)) <= max_w for ln in idx)) or s <= min_size:
             break
         s = max(s - 2, min_size)
     if len(idx) > max_lines:
@@ -252,6 +253,70 @@ def wrap_caption(text: str, size: int, min_size: int, max_lines: int = CAPTION_M
         if len(alt) <= max_lines:
             idx = alt
     return s, [" ".join(words[j] for j in ln) for ln in idx]
+
+
+_PUNCT_BREAK = re.compile(r"[.!?…]$")
+_SOFT_BREAK = re.compile(r"[,;:–—-]$")
+
+
+def split_cue(text: str, size: int, max_lines: int = CAPTION_MAX_LINES, max_w: int = TEXT_W,
+              measure_factory=None) -> list[str]:
+    """Split a cue into the fewest sub-cues that each fit ``max_lines`` balanced lines at ``size``.
+
+    Breaks land on word boundaries, preferring sentence punctuation, then commas, then balanced lengths.
+    A single word that cannot fit is left alone (the caller shrinks it).
+    """
+    words = text.split()
+    mf = measure_factory or (lambda s: (lambda t, f=_font(s): f.getlength(t)))
+    measure = mf(size)
+
+    def fits(i: int, j: int) -> bool:
+        seg = words[i:j]
+        return j - i == 1 or len(wrap_balanced(seg, max_w, measure)) <= max_lines and \
+            len(_greedy(seg, max_w, measure)) <= max_lines
+
+    n = len(words)
+    if n == 0 or fits(0, n):
+        return [text] if n else []
+    # DP over suffixes: cost = (pieces, -break bonus, sum of squared piece lengths)
+    best: dict[int, tuple] = {n: ((0, 0, 0), None)}
+    for i in range(n - 1, -1, -1):
+        cands = []
+        for j in range(i + 1, n + 1):
+            if not fits(i, j):
+                if j - i > 1:
+                    break
+                continue
+            c, _ = best[j]
+            last = words[j - 1]
+            bonus = 0 if j == n else (6 if _PUNCT_BREAK.search(last) else 3 if _SOFT_BREAK.search(last) else 0)
+            ln = len(" ".join(words[i:j]))
+            cands.append(((c[0] + 1, c[1] - bonus, c[2] + ln * ln), j))
+        best[i] = min(cands)
+    out, i = [], 0
+    while i < n:
+        j = best[i][1]
+        out.append(" ".join(words[i:j]))
+        i = j
+    return out
+
+
+def split_cues(cues: list[tuple[float, float, str]], size: int, measure_factory=None) -> list[tuple[float, float, str]]:
+    """Expand cues into sub-cues; time is shared proportionally to character count (contiguous, same span)."""
+    out = []
+    for t0, t1, body in cues:
+        parts = split_cue(body, size, measure_factory=measure_factory)
+        if len(parts) <= 1:
+            out.append((t0, t1, body))
+            continue
+        total = sum(len(p) for p in parts)
+        acc = 0
+        for k, p in enumerate(parts):
+            a = t0 + (t1 - t0) * acc / total
+            acc += len(p)
+            b = t1 if k == len(parts) - 1 else t0 + (t1 - t0) * acc / total
+            out.append((a, b, p))
+    return out
 
 
 def build_ass(cues: list[tuple[float, float, str]], size: int, min_size: int, top_y: int,
@@ -267,7 +332,7 @@ def build_ass(cues: list[tuple[float, float, str]], size: int, min_size: int, to
         "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
     )
     ev = []
-    for t0, t1, body in cues:
+    for t0, t1, body in split_cues(cues, size, measure_factory):
         s, lines = wrap_caption(body, size, min_size, measure_factory=measure_factory)
         txt = "\\N".join(lines)
         if s != size:
